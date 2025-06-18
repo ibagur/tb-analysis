@@ -35,20 +35,21 @@ if (!dir.exists(output_dir)) {
 
 # Step 1: Load the CSV into a tibble
 print("Loading Global TB Report 2024 dataset...")
-tb_global_2024 <- read_delim("data/DATA Global TB Report 2024.csv", 
-                            delim = ";", 
-                            col_types = cols(
-                              IND_NAME = col_character(),
-                              DIM_GEO_NAME = col_character(),
-                              IND_CODE = col_character(),
-                              DIM_GEO_CODE = col_character(),
-                              DIM_TIME_YEAR = col_integer(),
-                              DIM_1_CODE = col_character(),
-                              VALUE_NUMERIC = col_double(),
-                              VALUE_STRING = col_double(),
-                              VALUE_COMMENTS = col_character()
-                            ))
-                           
+tb_global_2024 <- read_delim("data/DATA Global TB Report 2024.csv",
+  delim = ";",
+  col_types = cols(
+    IND_NAME = col_character(),
+    DIM_GEO_NAME = col_character(),
+    IND_CODE = col_character(),
+    DIM_GEO_CODE = col_character(),
+    DIM_TIME_YEAR = col_integer(),
+    DIM_1_CODE = col_character(),
+    VALUE_NUMERIC = col_double(),
+    VALUE_STRING = col_double(),
+    VALUE_COMMENTS = col_character()
+  )
+)
+
 
 print(paste("Dataset loaded with", nrow(tb_global_2024), "rows and", ncol(tb_global_2024), "columns"))
 
@@ -77,28 +78,34 @@ print(paste("Columns removed. Dataset now has", ncol(tb_global_2024_clean), "col
 # Step 5: Filter out rows with specific values in DIM_1_CODE
 print("Filtering out age group and sex-specific rows...")
 tb_global_2024_filtered <- tb_global_2024_clean %>%
-  filter(!DIM_1_CODE %in% c('AGEGROUP_YEARS15-19', 'AGEGROUP_YEARS10-14', 'SEX_FMLE', 'SEX_MLE')) %>%
+  filter(!DIM_1_CODE %in% c("AGEGROUP_YEARS15-19", "AGEGROUP_YEARS10-14", "SEX_FMLE", "SEX_MLE")) %>%
   filter(!str_detect(DIM_GEO_NAME, "Region"))
 
-print(paste("Filtering complete. Dataset reduced from", nrow(tb_global_2024_clean), 
-            "to", nrow(tb_global_2024_filtered), "rows"))
+print(paste(
+  "Filtering complete. Dataset reduced from", nrow(tb_global_2024_clean),
+  "to", nrow(tb_global_2024_filtered), "rows"
+))
 
 # Step 6: Pivot the tibble across the IND_CODE variable
 print("Pivoting dataset across IND_CODE...")
 tb_global_2024_pivoted <- tb_global_2024_filtered %>%
-  select(-DIM_1_CODE) %>%  # Remove DIM_1_CODE as it's no longer needed after filtering
+  select(-DIM_1_CODE) %>% # Remove DIM_1_CODE as it's no longer needed after filtering
   pivot_wider(
     names_from = IND_CODE,
     values_from = VALUE_STRING,
-    values_fn = mean  # In case of duplicates, take the mean
+    values_fn = mean # In case of duplicates, take the mean
   ) %>%
   rename_with(str_to_lower) %>%
-  rename(country = dim_geo_name, 
-         iso3 = dim_geo_code, 
-         year = dim_time_year)
+  rename(
+    country = dim_geo_name,
+    iso3 = dim_geo_code,
+    year = dim_time_year
+  )
 
-print(paste("Pivoting complete. Dataset now has", nrow(tb_global_2024_pivoted), "rows and", 
-            ncol(tb_global_2024_pivoted), "columns"))
+print(paste(
+  "Pivoting complete. Dataset now has", nrow(tb_global_2024_pivoted), "rows and",
+  ncol(tb_global_2024_pivoted), "columns"
+))
 
 # Step 7: Export the resulting tibble as CSV to output folder
 write_csv(tb_global_2024_pivoted, "output/tb_global_2024_processed.csv")
@@ -110,8 +117,10 @@ print(paste("Original dataset:", nrow(tb_global_2024), "rows x", ncol(tb_global_
 print(paste("Unique indicators:", nrow(tb_global_2024_dictionary)))
 print(paste("Final processed dataset:", nrow(tb_global_2024_pivoted), "rows x", ncol(tb_global_2024_pivoted), "columns"))
 print(paste("Countries/regions included:", length(unique(tb_global_2024_pivoted$dim_geo_name))))
-print(paste("Years covered:", min(tb_global_2024_pivoted$dim_time_year, na.rm = TRUE), 
-            "to", max(tb_global_2024_pivoted$dim_time_year, na.rm = TRUE)))
+print(paste(
+  "Years covered:", min(tb_global_2024_pivoted$dim_time_year, na.rm = TRUE),
+  "to", max(tb_global_2024_pivoted$dim_time_year, na.rm = TRUE)
+))
 
 # Display first few rows of processed data
 print("=== PREVIEW OF PROCESSED DATA ===")
@@ -120,34 +129,39 @@ glimpse(tb_global_2024_pivoted)
 # Step 8: Data Quality Check for Timor-Leste (2015-2023)
 print("=== TIMOR-LESTE DATA QUALITY CHECK ===")
 timor_leste_check <- tb_global_2024_pivoted %>%
-  filter(country == 'Timor-Leste', 
-         year >= 2015 & year <= 2023)
+  filter(
+    country == "Timor-Leste",
+    year >= 2015 & year <= 2023
+  )
 
 print(paste("Timor-Leste data rows found:", nrow(timor_leste_check)))
 
 if (nrow(timor_leste_check) > 0) {
   # Count non-missing values per column (excluding identifier columns)
   column_completeness <- timor_leste_check %>%
-    select(-country, -iso3, -year) %>%  # Exclude identifier columns
+    select(-country, -iso3, -year) %>% # Exclude identifier columns
     summarise(across(everything(), ~ sum(!is.na(.x)))) %>%
     pivot_longer(everything(), names_to = "column", values_to = "non_missing_count") %>%
     filter(non_missing_count >= 3) %>%
     arrange(desc(non_missing_count))
-  
+
   print(paste("Columns with at least 3 non-missing values:", nrow(column_completeness)))
-  
+
   # Display the results
   print("=== COLUMN COMPLETENESS SUMMARY ===")
   print(column_completeness)
-  
+
   # Summary statistics
-  indicator_columns <- ncol(timor_leste_check) - 3  # Total columns minus the 3 identifier columns
+  indicator_columns <- ncol(timor_leste_check) - 3 # Total columns minus the 3 identifier columns
   print(paste("Total indicator columns checked:", indicator_columns))
   print(paste("Columns with sufficient data (>=3 values):", nrow(column_completeness)))
-  print(paste("Data completeness rate:", round(nrow(column_completeness)/indicator_columns*100, 1), "%"))
+  print(paste("Data completeness rate:", round(nrow(column_completeness) / indicator_columns * 100, 1), "%"))
   # Set a flag to indicate if the data is complete
-  if (nrow(column_completeness) == 0) {tl_global_complete <- FALSE} else {tl_global_complete <- TRUE}
-  
+  if (nrow(column_completeness) == 0) {
+    tl_global_complete <- FALSE
+  } else {
+    tl_global_complete <- TRUE
+  }
 } else {
   print("No data found for Timor-Leste in the specified period")
 }
@@ -159,7 +173,7 @@ if (nrow(timor_leste_check) > 0) {
 # Define file paths for all TB datasets (excluding data dictionary)
 data_files <- list(
   burden = "data/TB_burden_countries_2025-06-08.csv",
-  budget = "data/TB_budget_2025-06-07.csv", 
+  budget = "data/TB_budget_2025-06-07.csv",
   community = "data/TB_community_engagement_2025-06-07.csv",
   dr_surveillance = "data/TB_dr_surveillance_2025-06-08.csv",
   expenditure = "data/TB_expenditure_utilisation_2025-06-07.csv",
@@ -183,19 +197,19 @@ if (!all(file_check)) {
 # Function to load and add dataset source identifier
 load_tb_dataset <- function(file_path, dataset_name) {
   cat("Loading:", dataset_name, "from", file_path, "\n")
-  
+
   # Read the CSV file
   data <- read_csv(file_path, show_col_types = FALSE)
-  
+
   # Add dataset source column
   data$dataset_source <- dataset_name
-  
+
   # Print basic info
   cat("  Dimensions:", nrow(data), "rows x", ncol(data), "columns\n")
   cat("  Columns:", paste(names(data)[1:min(5, ncol(data))], collapse = ", "))
   if (ncol(data) > 5) cat(", ...")
   cat("\n\n")
-  
+
   return(data)
 }
 
@@ -220,48 +234,50 @@ dataset_summary <- tibble(
   )
 
 # Display results using pwalk for formatted output
-pwalk(list(dataset_summary$dataset_name, 
-          dataset_summary$nrows, 
-          dataset_summary$ncols,
-          dataset_summary$common_cols,
-          dataset_summary$first_10_cols), 
-     function(name, rows, cols, common, first_cols) {
-       cat("Dataset:", name, "\n")
-       cat("Dimensions:", rows, "rows x", cols, "columns\n")
-       cat("Common joining columns:", paste(common, collapse = ", "), "\n")
-       cat("First 10 columns:", paste(first_cols, collapse = ", "), "\n")
-       cat("---\n\n")
-     })
+pwalk(
+  list(
+    dataset_summary$dataset_name,
+    dataset_summary$nrows,
+    dataset_summary$ncols,
+    dataset_summary$common_cols,
+    dataset_summary$first_10_cols
+  ),
+  function(name, rows, cols, common, first_cols) {
+    cat("Dataset:", name, "\n")
+    cat("Dimensions:", rows, "rows x", cols, "columns\n")
+    cat("Common joining columns:", paste(common, collapse = ", "), "\n")
+    cat("First 10 columns:", paste(first_cols, collapse = ", "), "\n")
+    cat("---\n\n")
+  }
+)
 ```
 
 ```{r}
 # Function to standardize joining columns and combine datasets using functional programming
 combine_tb_datasets <- function(dataset_list) {
-  
   # Start with the first dataset as base
   base_data <- dataset_list[[1]]
   cat("Starting with", names(dataset_list)[1], "as base dataset\n")
   cat("Base dimensions:", nrow(base_data), "rows x", ncol(base_data), "columns\n\n")
-  
+
   # Use reduce to sequentially join all datasets
   combined_data <- reduce2(
-    .x = dataset_list[-1],  # All datasets except the first
-    .y = names(dataset_list)[-1],  # Corresponding names
+    .x = dataset_list[-1], # All datasets except the first
+    .y = names(dataset_list)[-1], # Corresponding names
     .init = base_data,
     .f = function(combined, next_dataset, dataset_name) {
-      
       cat("Joining", dataset_name, "...\n")
       cat("  Dataset dimensions:", nrow(next_dataset), "rows x", ncol(next_dataset), "columns\n")
-      
+
       # Identify common columns for joining using vectorized operations
       possible_join_cols <- c("country", "year", "iso3")
       join_cols <- possible_join_cols[
-        possible_join_cols %in% names(combined) & 
-        possible_join_cols %in% names(next_dataset)
+        possible_join_cols %in% names(combined) &
+          possible_join_cols %in% names(next_dataset)
       ]
-      
+
       cat("  Joining on columns:", paste(join_cols, collapse = ", "), "\n")
-      
+
       # Perform full join to preserve all data
       if (length(join_cols) > 0) {
         result <- full_join(combined, next_dataset, by = join_cols)
@@ -269,12 +285,12 @@ combine_tb_datasets <- function(dataset_list) {
         cat("  WARNING: No common columns found, using cbind (risky!)\n")
         result <- cbind(combined, next_dataset)
       }
-      
+
       cat("  Combined dimensions:", nrow(result), "rows x", ncol(result), "columns\n\n")
       return(result)
     }
   )
-  
+
   return(combined_data)
 }
 
@@ -300,24 +316,24 @@ cat("=== REMOVING DUPLICATE COLUMNS ===\n\n")
 remove_duplicate_columns <- function(data) {
   original_ncol <- ncol(data)
   original_names <- names(data)
-  
+
   cat("Original dataset dimensions:", nrow(data), "rows x", original_ncol, "columns\n")
-  
+
   # Identify duplicate column names
   duplicate_names <- original_names[duplicated(original_names)]
-  
+
   if (length(duplicate_names) > 0) {
     cat("Found duplicate column names:", paste(duplicate_names, collapse = ", "), "\n")
-    
+
     # Keep only the first occurrence of each column name
     data <- data[, !duplicated(names(data))]
-    
+
     cat("After removing duplicates:", nrow(data), "rows x", ncol(data), "columns\n")
     cat("Removed", original_ncol - ncol(data), "duplicate columns\n")
   } else {
     cat("No duplicate column names found\n")
   }
-  
+
   # Also check for columns with identical content (but different names)
   # This is more computationally intensive, so we'll just flag potential issues
   if (ncol(data) > 50) {
@@ -326,13 +342,13 @@ remove_duplicate_columns <- function(data) {
     cat("Checking for content-based duplicates...\n")
     # Convert to character for comparison to handle different data types
     data_char <- data %>% mutate(across(everything(), as.character))
-    
+
     # Find columns with identical content using functional approach
     # Create all pairs of column indices to compare
     col_indices <- seq_len(ncol(data_char))
     col_pairs <- expand.grid(i = col_indices, j = col_indices) %>%
-      filter(i < j)  # Only compare each pair once
-    
+      filter(i < j) # Only compare each pair once
+
     # Check for identical content using map2
     content_duplicates <- col_pairs %>%
       mutate(
@@ -342,7 +358,7 @@ remove_duplicate_columns <- function(data) {
       ) %>%
       filter(identical_content) %>%
       pull(col_j)
-    
+
     if (length(content_duplicates) > 0) {
       cat("Found columns with identical content:", paste(content_duplicates, collapse = ", "), "\n")
       cat("Consider reviewing these manually\n")
@@ -350,7 +366,7 @@ remove_duplicate_columns <- function(data) {
       cat("No content-based duplicates found\n")
     }
   }
-  
+
   return(data)
 }
 
@@ -373,16 +389,18 @@ if (ncol(tb_final) > 20) {
 }
 
 # Check for key columns we'll need for analysis
-key_columns <- c("country", "year", "iso3", "g_whoregion", 
-                "e_inc_100k", "e_mort_100k", "c_cdr", "c_newinc",
-                "budget_tot", "exp_tot")
+key_columns <- c(
+  "country", "year", "iso3", "g_whoregion",
+  "e_inc_100k", "e_mort_100k", "c_cdr", "c_newinc",
+  "budget_tot", "exp_tot"
+)
 
 cat("\n=== KEY COLUMNS CHECK ===\n")
 # Check key columns using vectorized operations
 key_columns_check <- tibble(column = key_columns) %>%
   mutate(
     present = column %in% names(tb_final),
-    non_na_count = map_int(column, ~ if(.x %in% names(tb_final)) sum(!is.na(tb_final[[.x]])) else 0)
+    non_na_count = map_int(column, ~ if (.x %in% names(tb_final)) sum(!is.na(tb_final[[.x]])) else 0)
   )
 
 # Display results using walk
@@ -390,7 +408,7 @@ walk(1:nrow(key_columns_check), function(i) {
   col <- key_columns_check$column[i]
   present <- key_columns_check$present[i]
   count <- key_columns_check$non_na_count[i]
-  
+
   if (present) {
     cat("*", col, "- Present (", count, "non-NA values)\n")
   } else {
@@ -441,7 +459,7 @@ print(year_counts)
 cat("\nTotal rows before filtering:", nrow(tb_final), "\n")
 
 # Filter for years 2015-2023
-tb_filtered <- tb_final %>% 
+tb_filtered <- tb_final %>%
   filter(year >= 2015 & year <= 2023)
 
 cat("Total rows after filtering:", nrow(tb_filtered), "\n")
@@ -452,7 +470,7 @@ filtered_year_counts <- table(tb_filtered$year, useNA = "ifany")
 print(filtered_year_counts)
 
 # Check Timor-Leste data in filtered dataset
-timor_filtered <- tb_filtered %>% 
+timor_filtered <- tb_filtered %>%
   filter(country == "Timor-Leste")
 
 cat("\nTimor-Leste data in filtered dataset:\n")
@@ -468,7 +486,7 @@ if (nrow(timor_filtered) > 0) {
 cat("=== REMOVING COLUMNS WITH fewer than 3 non-NA values for Timor-Leste ===\n\n")
 
 # Filter for Timor-Leste data to check which columns have any data
-timor_data <- tb_filtered %>% 
+timor_data <- tb_filtered %>%
   filter(country == "Timor-Leste")
 
 if (nrow(timor_data) > 0) {
@@ -478,10 +496,10 @@ if (nrow(timor_data) > 0) {
     pivot_longer(cols = everything(), names_to = "column", values_to = "non_na_count") %>%
     filter(non_na_count < 3) %>%
     pull(column)
-  
+
   cat("Original dataset columns:", ncol(tb_filtered), "\n")
   cat("Columns with fewer than 3 non-NA values for Timor-Leste:", length(timor_missing_cols), "\n")
-  
+
   if (length(timor_missing_cols) > 0) {
     # Show first few examples
     cat("Examples of columns to remove:", paste(head(timor_missing_cols, 10), collapse = ", "))
@@ -489,37 +507,35 @@ if (nrow(timor_data) > 0) {
       cat(", ... and", length(timor_missing_cols) - 10, "more")
     }
     cat("\n\n")
-    
+
     # Remove these columns from the entire dataset
-    tb_filtered_clean <- tb_filtered %>% 
+    tb_filtered_clean <- tb_filtered %>%
       select(-all_of(timor_missing_cols))
-    
+
     cat("After removing columns with insufficient Timor-Leste data:", ncol(tb_filtered_clean), "columns\n")
     cat("Removed", length(timor_missing_cols), "columns with fewer than 3 non-NA values\n")
-    
+
     # Update the filtered dataset
     tb_filtered <- tb_filtered_clean
-    
   } else {
     cat("No columns found with fewer than 3 non-NA values for Timor-Leste\n")
   }
-  
+
   # Verify Timor-Leste data availability after cleaning
-  timor_clean <- tb_filtered %>% 
+  timor_clean <- tb_filtered %>%
     filter(country == "Timor-Leste")
-  
+
   # Count non-missing columns for Timor-Leste using vectorized operations
   timor_data_cols <- timor_clean %>%
     summarise(across(everything(), ~ !all(is.na(.x)))) %>%
     pivot_longer(cols = everything(), names_to = "column", values_to = "has_data") %>%
     summarise(count = sum(has_data)) %>%
     pull(count)
-  
+
   cat("\nTimor-Leste data verification after cleaning:\n")
   cat("Total columns:", ncol(timor_clean), "\n")
   cat("Columns with at least some Timor-Leste data:", timor_data_cols, "\n")
   cat("Columns with fewer than 3 non-NA values for Timor-Leste:", ncol(timor_clean) - timor_data_cols, "\n")
-  
 } else {
   cat("WARNING: No Timor-Leste data found for cleaning!\n")
 }
@@ -547,11 +563,11 @@ cat("Removing variables with complex suffixes:\n")
 cat("Variables to remove:", length(vars_to_remove), "\n")
 if (length(vars_to_remove) > 0) {
   cat("Examples:", paste(head(vars_to_remove, 8), collapse = ", "), "\n")
-  
+
   # Remove these variables
   tb_filtered_clean <- tb_filtered %>%
     select(-all_of(vars_to_remove))
-  
+
   cat("Dataset after removing complex suffixes:", ncol(tb_filtered_clean), "columns\n\n")
 } else {
   tb_filtered_clean <- tb_filtered
@@ -565,14 +581,14 @@ cat("Renaming variables ending in '.x':\n")
 cat("Variables to rename:", length(vars_with_x), "\n")
 if (length(vars_with_x) > 0) {
   cat("Examples:", paste(head(vars_with_x, 8), collapse = ", "), "\n")
-  
+
   # Create new names without .x suffix
   new_names <- names(tb_filtered_clean)
   new_names[grepl("\\.x$", new_names)] <- gsub("\\.x$", "", new_names[grepl("\\.x$", new_names)])
-  
+
   # Apply new names
   names(tb_filtered_clean) <- new_names
-  
+
   cat("Sample renamed variables:\n")
   renamed_examples <- data.frame(
     original = head(vars_with_x, 5),
@@ -602,35 +618,41 @@ cat("Total variables:", ncol(tb_filtered), "\n")
 cat("Countries included:", length(unique(tb_filtered$country)), "\n")
 
 # Check data availability for key variables in the filtered period
-key_vars_analysis <- c("e_inc_100k", "e_mort_100k", "c_cdr", "c_newinc", 
-                      "budget_tot", "exp_tot", "newrel_hivtest", "conf_rrmdr")
+key_vars_analysis <- c(
+  "e_inc_100k", "e_mort_100k", "c_cdr", "c_newinc",
+  "budget_tot", "exp_tot", "newrel_hivtest", "conf_rrmdr"
+)
 
 cat("\nKey variables data availability (2015-2023):\n")
 # Create a summary of key variables availability using dplyr
 key_vars_summary <- tibble(variable = key_vars_analysis) %>%
   mutate(
     exists = map_lgl(variable, ~ .x %in% names(tb_filtered)),
-    available = map_int(variable, ~ if(.x %in% names(tb_filtered)) sum(!is.na(tb_filtered[[.x]])) else 0),
+    available = map_int(variable, ~ if (.x %in% names(tb_filtered)) sum(!is.na(tb_filtered[[.x]])) else 0),
     percentage = round((available / nrow(tb_filtered)) * 100, 1)
   )
 
 # Display results using pwalk
-pwalk(list(key_vars_summary$variable, key_vars_summary$exists, 
-          key_vars_summary$available, key_vars_summary$percentage),
-     function(var, exists, avail, pct) {
-       if (exists) {
-         cat(" ", var, ":", avail, "observations (", pct, "%)\n")
-       } else {
-         cat(" ", var, ": Variable not found\n")
-       }
-     })
+pwalk(
+  list(
+    key_vars_summary$variable, key_vars_summary$exists,
+    key_vars_summary$available, key_vars_summary$percentage
+  ),
+  function(var, exists, avail, pct) {
+    if (exists) {
+      cat(" ", var, ":", avail, "observations (", pct, "%)\n")
+    } else {
+      cat(" ", var, ": Variable not found\n")
+    }
+  }
+)
 
 # Timor-Leste readiness check
 cat("\nTimor-Leste analysis readiness:\n")
 if (nrow(timor_filtered) > 0) {
   timor_years <- sort(unique(timor_filtered$year))
   cat("Years available:", paste(timor_years, collapse = ", "), "\n")
-  
+
   # Check key variables for Timor-Leste using vectorized approach
   timor_key_vars <- c("e_inc_100k", "c_cdr", "budget_tot")
   timor_vars_summary <- tibble(variable = timor_key_vars) %>%
@@ -638,10 +660,12 @@ if (nrow(timor_filtered) > 0) {
     mutate(
       non_na_count = map_int(variable, ~ sum(!is.na(timor_filtered[[.x]])))
     )
-  
+
   # Display results
-  walk2(timor_vars_summary$variable, timor_vars_summary$non_na_count,
-       ~ cat(" ", .x, ":", .y, "non-NA values\n"))
+  walk2(
+    timor_vars_summary$variable, timor_vars_summary$non_na_count,
+    ~ cat(" ", .x, ":", .y, "non-NA values\n")
+  )
 } else {
   cat("WARNING: No Timor-Leste data in filtered period!\n")
 }
@@ -662,11 +686,11 @@ if (file.exists(output_file_clean)) {
   file_size <- file.size(output_file_clean)
   cat("Export successful!\n")
   cat("File size:", round(file_size / (1024^2), 2), "MB\n")
-  
+
   # Quick verification
   verification <- read_csv(output_file_clean, n_max = 3, show_col_types = FALSE)
   cat("Verification dimensions:", nrow(verification), "rows x", ncol(verification), "columns\n")
-  
+
   # Check if variable names are clean
   suffix_check <- sum(grepl("\\.(x|y)", names(verification)))
   cat("Variables with suffixes in exported file:", suffix_check, "\n")
@@ -701,7 +725,7 @@ variable_docs <- tibble(
   in_dictionary = variable_name %in% data_dict$variable_name
 ) %>%
   left_join(
-    data_dict %>% 
+    data_dict %>%
       select(variable_name, definition, dataset, code_list) %>%
       # Handle potential duplicates by taking first occurrence
       group_by(variable_name) %>%
@@ -738,12 +762,12 @@ if (length(missing_var_indices) > 0) {
       in_dict = clean_name %in% data_dict$variable_name,
       can_match = name_changed & in_dict
     )
-  
+
   # Process matches using left_join
   matched_vars <- suffix_matches %>%
     filter(can_match) %>%
     left_join(
-      data_dict %>% 
+      data_dict %>%
         select(variable_name, definition, dataset, code_list) %>%
         rename(clean_name = variable_name),
       by = "clean_name"
@@ -753,12 +777,12 @@ if (length(missing_var_indices) > 0) {
       dataset_source = dataset,
       in_dictionary = TRUE
     )
-  
+
   # Update the original dataframe for matched variables
   if (nrow(matched_vars) > 0) {
     match_indices <- missing_var_indices[suffix_matches$can_match]
     variable_docs$description[match_indices] <- matched_vars$description
-    variable_docs$dataset_source[match_indices] <- matched_vars$dataset_source  
+    variable_docs$dataset_source[match_indices] <- matched_vars$dataset_source
     variable_docs$code_list[match_indices] <- matched_vars$code_list
     variable_docs$in_dictionary[match_indices] <- TRUE
   }
@@ -770,7 +794,7 @@ manual_descriptions <- list(
   "country" = "Country name",
   "year" = "Calendar year",
   "iso2" = "ISO 2-letter country code",
-  "iso3" = "ISO 3-letter country code", 
+  "iso3" = "ISO 3-letter country code",
   "iso_numeric" = "ISO numeric country code"
 )
 
@@ -837,13 +861,13 @@ cat("Matching", length(variable_names), "variables with their descriptions...\n"
 # Match variables with descriptions using vectorized operations
 descriptions_lookup <- tibble(variable_name = variable_names) %>%
   left_join(
-    variable_documentation %>% 
+    variable_documentation %>%
       select(variable_name, description),
     by = "variable_name"
   ) %>%
   mutate(
     description = coalesce(
-      description, 
+      description,
       paste("[No description available for", variable_name, "]")
     )
   )
@@ -877,30 +901,31 @@ if (file.exists(enhanced_file)) {
   file_size <- round(file.size(enhanced_file) / (1024^2), 2)
   cat("Export successful!\n")
   cat("File size:", file_size, "MB\n")
-  
+
   # Quick verification - read first 3 rows to check format
   verification <- read_csv(enhanced_file, n_max = 3, show_col_types = FALSE)
   cat("Verification - first 3 rows (1 description + 2 data rows):\n")
   cat("Dimensions:", nrow(verification), "rows x", ncol(verification), "columns\n")
-  
+
   # Show a sample of the description row for verification
   cat("\nSample variable descriptions (first 3 columns):\n")
   # Create sample verification using tidyverse
-  sample_descriptions <- verification[1, ] %>%  # First row contains descriptions
+  sample_descriptions <- verification[1, ] %>% # First row contains descriptions
     select(1:min(3, ncol(verification))) %>%
     pivot_longer(cols = everything(), names_to = "col_name", values_to = "description")
-  
+
   # Display using walk2
-  walk2(sample_descriptions$col_name, sample_descriptions$description,
-       ~ cat("  -", .x, ":", substr(as.character(.y), 1, 60), "...\n"))
-  
+  walk2(
+    sample_descriptions$col_name, sample_descriptions$description,
+    ~ cat("  -", .x, ":", substr(as.character(.y), 1, 60), "...\n")
+  )
 } else {
   cat("Export failed!\n")
 }
 
 cat("\n=== ENHANCED EXPORT COMPLETE ===\n")
 cat("The CSV file now contains:\n")
-cat("  - Row 1: Variable names (headers)\n") 
+cat("  - Row 1: Variable names (headers)\n")
 cat("  - Row 2: Variable descriptions from WHO data dictionary\n")
 cat("  - Rows 3+: Actual data (", nrow(tb_filtered), "observations)\n")
 cat("  - Total columns:", ncol(tb_filtered), "\n")
@@ -914,63 +939,63 @@ cat("=== SELECTING MOST RELEVANT VARIABLES FOR FOCUSED ANALYSIS ===\n\n")
 # Define categories of most relevant variables based on research questions
 # All variables listed below are confirmed to be available in tb_variables_documentation.csv
 key_variables <- list(
-  
+
   # PRIMARY OUTCOME VARIABLES (TB Incidence & Mortality)
   primary_outcomes = c(
-    "e_inc_100k",          # Estimated incidence (all forms) per 100,000 population
-    "e_mort_100k",         # Estimated mortality per 100,000 population  
-    "e_inc_num"            # Estimated number of incident cases (all forms)
+    "e_inc_100k", # Estimated incidence (all forms) per 100,000 population
+    "e_mort_100k", # Estimated mortality per 100,000 population
+    "e_inc_num" # Estimated number of incident cases (all forms)
   ),
-  
+
   # CASE DETECTION & SURVEILLANCE
   case_detection = c(
-    "c_cdr",               # Case detection rate (treatment coverage), percent
-    "c_newinc",            # Total of new and relapse cases
-    "c_newinc_100k"        # Case notification rate per 100,000 population
+    "c_cdr", # Case detection rate (treatment coverage), percent
+    "c_newinc", # Total of new and relapse cases
+    "c_newinc_100k" # Case notification rate per 100,000 population
   ),
-  
+
   # FINANCIAL & RESOURCE ALLOCATION
   financial = c(
-    "budget_tot",          # Total budget required (US Dollars)
-    "exp_tot",             # Total actual expenditure (US Dollars)
-    "rcvd_tot_domestic"    # Funding received from domestic sources (US Dollars)
+    "budget_tot", # Total budget required (US Dollars)
+    "exp_tot", # Total actual expenditure (US Dollars)
+    "rcvd_tot_domestic" # Funding received from domestic sources (US Dollars)
   ),
-  
+
   # COMMUNITY ENGAGEMENT & OUTREACH
   community_engagement = c(
-    "bmu",                 # Number of TB Basic Management Units in the country
-    "bmu_community_impl",  # BMUs implementing community-based referrals/treatment support
-    "bmu_ref_data",        # BMUs with data on referrals by community health workers
+    "bmu", # Number of TB Basic Management Units in the country
+    "bmu_community_impl", # BMUs implementing community-based referrals/treatment support
+    "bmu_ref_data", # BMUs with data on referrals by community health workers
     "community_data_available" # Community data availability indicator
   ),
-  
+
   # TREATMENT & OUTCOMES
   treatment_outcomes = c(
-    "newrel_hivtest",      # New and relapse cases tested for HIV
-    "succ_coh",            # Treatment success rate for cohort
-    "coh"                  # Cohort size for treatment outcome evaluation
+    "newrel_hivtest", # New and relapse cases tested for HIV
+    "succ_coh", # Treatment success rate for cohort
+    "coh" # Cohort size for treatment outcome evaluation
   ),
-  
+
   # DRUG RESISTANCE & SURVEILLANCE
   drug_resistance = c(
-    "conf_rrmdr",          # Laboratory-confirmed rifampicin-resistant/MDR-TB cases
-    "rr_new",              # New cases with rifampicin resistance
-    "mdr"                  # MDR-TB cases
+    "conf_rrmdr", # Laboratory-confirmed rifampicin-resistant/MDR-TB cases
+    "rr_new", # New cases with rifampicin resistance
+    "mdr" # MDR-TB cases
   ),
-  
+
   # POLICIES & HEALTH SYSTEM
   policies_services = c(
-    "caseb_err_nat",       # Case-based surveillance error at national level
-    "hcw_tb_infected",     # Healthcare workers infected with TB
-    "ident_pris"           # TB identification in prisons/detention facilities
+    "caseb_err_nat", # Case-based surveillance error at national level
+    "hcw_tb_infected", # Healthcare workers infected with TB
+    "ident_pris" # TB identification in prisons/detention facilities
   ),
-  
+
   # GEOGRAPHIC & TEMPORAL IDENTIFIERS
   identifiers = c(
-    "country",             # Country name
-    "year",                # Calendar year
-    "g_whoregion",         # WHO region
-    "iso3"                 # ISO 3-letter country code
+    "country", # Country name
+    "year", # Calendar year
+    "g_whoregion", # WHO region
+    "iso3" # ISO 3-letter country code
   )
 )
 
@@ -984,7 +1009,7 @@ variable_summary <- tibble(
   variable = unlist(key_variables, use.names = FALSE)
 ) %>%
   left_join(
-    variable_documentation %>% 
+    variable_documentation %>%
       select(variable_name, description),
     by = c("variable" = "variable_name")
   ) %>%
@@ -999,8 +1024,10 @@ variable_summary %>%
   group_by(category) %>%
   group_walk(~ {
     cat("\n", toupper(.y$category), ":\n")
-    walk2(.x$variable, .x$description_short,
-         ~ cat("  -", .x, ":", .y, "\n"))
+    walk2(
+      .x$variable, .x$description_short,
+      ~ cat("  -", .x, ":", .y, "\n")
+    )
   })
 
 cat("\nSUMMARY OF FOCUSED VARIABLE SELECTION:\n")
@@ -1014,8 +1041,10 @@ category_counts <- tibble(
 )
 
 # Display using walk2
-walk2(category_counts$category, category_counts$vars_total,
-     ~ cat("  -", .x, ":", .y, "variables\n"))
+walk2(
+  category_counts$category, category_counts$vars_total,
+  ~ cat("  -", .x, ":", .y, "variables\n")
+)
 ```
 
 ```{r}
@@ -1067,7 +1096,7 @@ if (nrow(timor_focused) > 0) {
     summarise(across(everything(), ~ sum(!is.na(.x)))) %>%
     pivot_longer(cols = everything(), names_to = "variable", values_to = "timor_non_na") %>%
     mutate(timor_obs = nrow(timor_focused))
-  
+
   # Display results using walk
   walk(1:nrow(timor_availability), function(i) {
     var <- timor_availability$variable[i]
@@ -1137,7 +1166,7 @@ focused_var_docs <- focused_var_docs %>%
 # Add descriptions using left_join instead of loops
 focused_var_docs <- focused_var_docs %>%
   left_join(
-    variable_documentation %>% 
+    variable_documentation %>%
       select(variable_name, description, dataset_source),
     by = "variable_name"
   ) %>%
@@ -1172,8 +1201,10 @@ category_summary <- focused_var_docs %>%
   arrange(category)
 
 # Display using walk2
-walk2(category_summary$category, category_summary$n_vars,
-     ~ cat("  *", .x, ":", .y, "variables\n"))
+walk2(
+  category_summary$category, category_summary$n_vars,
+  ~ cat("  *", .x, ":", .y, "variables\n")
+)
 
 # Count missing variables from original selection
 cat("\nMissing variables from original 23-variable selection:\n")
@@ -1184,10 +1215,12 @@ if (length(missing_vars) > 0) {
   missing_vars_summary <- tibble(variable = missing_vars) %>%
     left_join(category_mapping, by = c("variable" = "variable_name")) %>%
     mutate(category = coalesce(category, "unknown"))
-  
+
   # Display results using walk2
-  walk2(missing_vars_summary$variable, missing_vars_summary$category,
-       ~ cat("  *", .x, "(", .y, ")\n"))
+  walk2(
+    missing_vars_summary$variable, missing_vars_summary$category,
+    ~ cat("  *", .x, "(", .y, ")\n")
+  )
 } else {
   cat("  • None - all planned variables available!\n")
 }
@@ -1214,13 +1247,13 @@ cat("Matching", length(variable_names), "variables with their descriptions...\n"
 # Match variables with descriptions using vectorized operations
 descriptions_lookup <- tibble(variable_name = variable_names) %>%
   left_join(
-    variable_documentation %>% 
+    variable_documentation %>%
       select(variable_name, description),
     by = "variable_name"
   ) %>%
   mutate(
     description = coalesce(
-      description, 
+      description,
       paste("[No description available for", variable_name, "]")
     )
   )
@@ -1254,30 +1287,31 @@ if (file.exists(enhanced_file)) {
   file_size <- round(file.size(enhanced_file) / (1024^2), 2)
   cat("Export successful!\n")
   cat("File size:", file_size, "MB\n")
-  
+
   # Quick verification - read first 3 rows to check format
   verification <- read_csv(enhanced_file, n_max = 3, show_col_types = FALSE)
   cat("Verification - first 3 rows (1 description + 2 data rows):\n")
   cat("Dimensions:", nrow(verification), "rows x", ncol(verification), "columns\n")
-  
+
   # Show a sample of the description row for verification
   cat("\nSample variable descriptions (first 3 columns):\n")
   # Create sample verification using tidyverse
-  sample_descriptions <- verification[1, ] %>%  # First row contains descriptions
+  sample_descriptions <- verification[1, ] %>% # First row contains descriptions
     select(1:min(3, ncol(verification))) %>%
     pivot_longer(cols = everything(), names_to = "col_name", values_to = "description")
-  
+
   # Display using walk2
-  walk2(sample_descriptions$col_name, sample_descriptions$description,
-       ~ cat("  -", .x, ":", substr(as.character(.y), 1, 60), "...\n"))
-  
+  walk2(
+    sample_descriptions$col_name, sample_descriptions$description,
+    ~ cat("  -", .x, ":", substr(as.character(.y), 1, 60), "...\n")
+  )
 } else {
   cat("Export failed!\n")
 }
 
 cat("\n=== ENHANCED EXPORT COMPLETE ===\n")
 cat("The CSV file now contains:\n")
-cat("  - Row 1: Variable names (headers)\n") 
+cat("  - Row 1: Variable names (headers)\n")
 cat("  - Row 2: Variable descriptions from WHO data dictionary\n")
 cat("  - Rows 3+: Actual data (", nrow(tb_focused), "observations)\n")
 cat("  - Total columns:", ncol(tb_focused), "\n")
@@ -1291,7 +1325,7 @@ cat("  - Period: 2015-2023\n")
 ```{r}
 # Load required libraries
 library(tidyverse)
-library(scales)      # For better axis formatting
+library(scales) # For better axis formatting
 ```
 
 TB Incidence Evolution by WHO Region (2015-2023)
@@ -1318,21 +1352,21 @@ tb_incidence_timeline <- tb_data %>%
 
 # Display data summary
 cat("\nTimeline data summary:\n")
-print(tb_incidence_timeline %>% 
-      group_by(g_whoregion) %>% 
-      summarise(
-        years_available = paste(range(year), collapse = "-"),
-        avg_incidence = round(mean(mean_incidence), 1),
-        countries = round(mean(countries_count), 0),
-        .groups = "drop"
-      ))
+print(tb_incidence_timeline %>%
+  group_by(g_whoregion) %>%
+  summarise(
+    years_available = paste(range(year), collapse = "-"),
+    avg_incidence = round(mean(mean_incidence), 1),
+    countries = round(mean(countries_count), 0),
+    .groups = "drop"
+  ))
 
 # Create the timeline multi-line plot
 tb_timeline_plot <- tb_incidence_timeline %>%
   ggplot(aes(x = year, y = mean_incidence, color = g_whoregion)) +
   geom_line(size = 1.2, alpha = 0.8) +
   geom_point(size = 2, alpha = 0.9) +
-  
+
   # Enhance the plot appearance
   scale_x_continuous(
     breaks = seq(2015, 2023, 1),
@@ -1347,7 +1381,7 @@ tb_timeline_plot <- tb_incidence_timeline %>%
     option = "plasma",
     end = 0.9
   ) +
-  
+
   # Add labels and title
   labs(
     title = "TB Incidence Evolution by WHO Region (2015-2023)",
@@ -1356,7 +1390,7 @@ tb_timeline_plot <- tb_incidence_timeline %>%
     y = "TB Incidence Rate (per 100,000)",
     caption = "Source: WHO Global TB Database | Data: Regional averages"
   ) +
-  
+
   # Apply clean theme
   theme_minimal() +
   theme(
@@ -1376,9 +1410,10 @@ tb_timeline_plot <- tb_incidence_timeline %>%
 print(tb_timeline_plot)
 
 # Optional: Save the plot
-ggsave("output/tb_incidence_timeline_by_region.png", 
-       plot = tb_timeline_plot,
-       width = 12, height = 8, dpi = 300, bg = "white")
+ggsave("output/tb_incidence_timeline_by_region.png",
+  plot = tb_timeline_plot,
+  width = 12, height = 8, dpi = 300, bg = "white"
+)
 
 cat("\nPlot saved as: output/tb_incidence_timeline_by_region.png\n")
 ```
@@ -1397,7 +1432,7 @@ timor_leste_data <- tb_country_timeline %>%
   filter(country == "Timor-Leste")
 
 # Check if Timor-Leste data exists
-if(nrow(timor_leste_data) > 0) {
+if (nrow(timor_leste_data) > 0) {
   cat("Timor-Leste data found:", nrow(timor_leste_data), "observations\n")
   cat("WHO Region:", unique(timor_leste_data$g_whoregion), "\n")
   cat("Years available:", paste(range(timor_leste_data$year), collapse = "-"), "\n")
@@ -1406,36 +1441,40 @@ if(nrow(timor_leste_data) > 0) {
   cat("Warning: No data found for Timor-Leste\n")
 }
 
-# Plot with individual countries (gray lines), regional averages (colored lines), 
+# Plot with individual countries (gray lines), regional averages (colored lines),
 # and Timor-Leste highlighted in red
 tb_detailed_plot <- tb_country_timeline %>%
   ggplot(aes(x = year, y = e_inc_100k)) +
-  
+
   # Individual country trajectories (subtle background)
-  geom_line(aes(group = country), 
-            alpha = 0.15, color = "gray50", size = 0.3) +
-  
+  geom_line(aes(group = country),
+    alpha = 0.15, color = "gray50", size = 0.3
+  ) +
+
   # HIGHLIGHT TIMOR-LESTE with red color only (same thickness)
-  geom_line(data = timor_leste_data,
-            aes(group = country), 
-            color = "#E31A1C", size = 0.3, alpha = 0.9) +
-  
+  geom_line(
+    data = timor_leste_data,
+    aes(group = country),
+    color = "#E31A1C", size = 0.3, alpha = 0.9
+  ) +
+
   # Regional average trend (prominent)
-  geom_line(data = tb_incidence_timeline,
-            aes(y = mean_incidence, color = g_whoregion), 
-            size = 1.5, alpha = 0.9) +
-  
+  geom_line(
+    data = tb_incidence_timeline,
+    aes(y = mean_incidence, color = g_whoregion),
+    size = 1.5, alpha = 0.9
+  ) +
+
   # Regional average points
-  geom_point(data = tb_incidence_timeline,
-             aes(y = mean_incidence, color = g_whoregion), 
-             size = 2.5, alpha = 0.9) +
-  
+  geom_point(
+    data = tb_incidence_timeline,
+    aes(y = mean_incidence, color = g_whoregion),
+    size = 2.5, alpha = 0.9
+  ) +
   facet_wrap(~g_whoregion, scales = "free_y", ncol = 3) +
-  
   scale_x_continuous(breaks = c(2015, 2018, 2021, 2023)) +
   scale_y_continuous(labels = comma_format()) +
   scale_color_viridis_d(option = "plasma", end = 0.9) +
-  
   labs(
     title = "TB Incidence: Regional Trends vs Country Variations (2015-2023)",
     subtitle = "Thick colored lines: Regional averages | Red line: Timor-Leste | Thin gray lines: Other countries",
@@ -1443,7 +1482,6 @@ tb_detailed_plot <- tb_country_timeline %>%
     y = "TB Incidence Rate (per 100,000)",
     caption = "Source: WHO Global TB Database | Timor-Leste highlighted in red"
   ) +
-  
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold"),
@@ -1457,9 +1495,10 @@ tb_detailed_plot <- tb_country_timeline %>%
 print(tb_detailed_plot)
 
 # Save the detailed plot with Timor-Leste highlighted
-ggsave("output/tb_incidence_detailed_timeline_timor_highlighted.png", 
-       plot = tb_detailed_plot,
-       width = 14, height = 10, dpi = 300, bg = "white")
+ggsave("output/tb_incidence_detailed_timeline_timor_highlighted.png",
+  plot = tb_detailed_plot,
+  width = 14, height = 10, dpi = 300, bg = "white"
+)
 
 cat("\nDetailed plot with Timor-Leste highlighted saved as: output/tb_incidence_detailed_timeline_timor_highlighted.png\n")
 ```
@@ -1479,17 +1518,15 @@ tb_dual_data <- tb_data %>%
   mutate(year = as.numeric(year))
 
 # Calculate scaling factor for dual axis
-scale_factor <- max(tb_dual_data$mean_incidence, na.rm = TRUE) / 
-                max(tb_dual_data$mean_mortality, na.rm = TRUE)
+scale_factor <- max(tb_dual_data$mean_incidence, na.rm = TRUE) /
+  max(tb_dual_data$mean_mortality, na.rm = TRUE)
 
 dual_axis_plot <- tb_dual_data %>%
   ggplot(aes(x = year)) +
   geom_line(aes(y = mean_incidence, color = "Incidence"), size = 1.2) +
   geom_point(aes(y = mean_incidence, color = "Incidence"), size = 2.5) +
-  
   geom_line(aes(y = mean_mortality * scale_factor, color = "Mortality"), size = 1.2) +
   geom_point(aes(y = mean_mortality * scale_factor, color = "Mortality"), size = 2.5) +
-  
   scale_y_continuous(
     name = "TB Incidence (per 100,000)",
     sec.axis = sec_axis(~ . / scale_factor, name = "TB Mortality (per 100,000)")
@@ -1521,16 +1558,13 @@ Mortality as percentage of incidence - shows treatment effectiveness trends, Low
 # Case fatality rate analysis
 cfr_plot <- tb_dual_data %>%
   mutate(case_fatality_rate = (mean_mortality / mean_incidence) * 100) %>%
-  
   ggplot(aes(x = year, y = mean_mortality)) +
   # geom_line(size = 1.2, color = "#E63946") +
   # geom_point(size = 3, color = "#E63946") +
-  
+
   # Add smooth trend
   geom_smooth(method = "loess", se = TRUE, alpha = 0.2, color = "#457B9D") +
-  
   scale_y_continuous(labels = percent_format(scale = 1)) +
-  
   labs(
     title = "TB Case Fatality Rate Evolution (2015-2023)",
     subtitle = "Mortality as percentage of incidence - shows treatment effectiveness trends",
@@ -1538,7 +1572,6 @@ cfr_plot <- tb_dual_data %>%
     y = "Case Fatality Rate (%)",
     caption = "Lower values indicate better treatment outcomes"
   ) +
-  
   theme_minimal()
 
 print(cfr_plot)
@@ -1550,19 +1583,19 @@ TB Incidence-Mortality Relationship Over Time (arrow plot)
 # Scatterplot showing incidence vs mortality with time trajectory
 trajectory_plot <- tb_dual_data %>%
   ggplot(aes(x = mean_incidence, y = mean_mortality)) +
-  
+
   # Path showing trajectory over time
-  geom_path(aes(color = year), size = 1.5, alpha = 0.8, 
-            arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
-  
+  geom_path(aes(color = year),
+    size = 1.5, alpha = 0.8,
+    arrow = arrow(length = unit(0.3, "cm"), type = "closed")
+  ) +
+
   # Points for each year
   geom_point(aes(color = year), size = 4, alpha = 0.9) +
-  
+
   # Add year labels for key points
   geom_text(aes(label = year), nudge_x = 2, nudge_y = 0.1, size = 3) +
-  
   scale_color_viridis_c(name = "Year", option = "plasma") +
-  
   labs(
     title = "TB Incidence-Mortality Relationship Over Time",
     subtitle = "Arrow shows temporal progression (2015-2023)",
@@ -1570,7 +1603,6 @@ trajectory_plot <- tb_dual_data %>%
     y = "TB Mortality (per 100,000)",
     caption = "Each point represents global average for that year"
   ) +
-  
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold"),
@@ -1603,19 +1635,19 @@ timor_leste_dual_data <- tb_data %>%
 # Scatterplot showing incidence vs mortality with time trajectory
 trajectory_plot <- timor_leste_dual_data %>%
   ggplot(aes(x = mean_incidence, y = mean_mortality)) +
-  
+
   # Path showing trajectory over time
-  geom_path(aes(color = year), size = 1.5, alpha = 0.8, 
-            arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
-  
+  geom_path(aes(color = year),
+    size = 1.5, alpha = 0.8,
+    arrow = arrow(length = unit(0.3, "cm"), type = "closed")
+  ) +
+
   # Points for each year
   geom_point(aes(color = year), size = 4, alpha = 0.9) +
-  
+
   # Add year labels for key points
   geom_text(aes(label = year), nudge_x = 2, nudge_y = 0.1, size = 3) +
-  
   scale_color_viridis_c(name = "Year", option = "plasma") +
-  
   labs(
     title = "TB Incidence-Mortality Relationship Over Time for Timor-Leste",
     subtitle = "Arrow shows temporal progression (2015-2023)",
@@ -1623,7 +1655,6 @@ trajectory_plot <- timor_leste_dual_data %>%
     y = "TB Mortality (per 100,000)",
     caption = "Each point represents global average for that year"
   ) +
-  
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold"),
@@ -1649,29 +1680,33 @@ regional_comparison <- tb_data %>%
 
 regional_facet_plot <- regional_comparison %>%
   ggplot(aes(x = mean_incidence, y = mean_mortality)) +
-  
+
   # Trajectory paths for each region
-  geom_path(color = "#2E86AB", size = 1.2, alpha = 0.8, 
-            arrow = arrow(length = unit(0.2, "cm"), type = "closed")) +
-  
+  geom_path(
+    color = "#2E86AB", size = 1.2, alpha = 0.8,
+    arrow = arrow(length = unit(0.2, "cm"), type = "closed")
+  ) +
+
   # Points for years (sized by year)
   geom_point(aes(size = year), color = "#2E86AB", alpha = 0.7) +
-  
+
   # Latest year highlighted
-  geom_point(data = . %>% filter(year == max(year)), 
-             size = 4, alpha = 1, stroke = 1.5, shape = 21, 
-             fill = "white", color = "#E63946") +
-  
+  geom_point(
+    data = . %>% filter(year == max(year)),
+    size = 4, alpha = 1, stroke = 1.5, shape = 21,
+    fill = "white", color = "#E63946"
+  ) +
+
   # First year highlighted differently
-  geom_point(data = . %>% filter(year == min(year)), 
-             size = 3, alpha = 1, shape = 22, 
-             fill = "#F77F00", color = "#F77F00") +
-  
+  geom_point(
+    data = . %>% filter(year == min(year)),
+    size = 3, alpha = 1, shape = 22,
+    fill = "#F77F00", color = "#F77F00"
+  ) +
+
   # Facet by WHO region
   facet_wrap(~g_whoregion, scales = "free", ncol = 3) +
-  
   scale_size_continuous(name = "Year", range = c(1.5, 3.5)) +
-  
   labs(
     title = "TB Incidence vs Mortality: Regional Trajectories by WHO Region (2015-2023)",
     subtitle = "Arrow shows temporal progression | Orange square: 2015 | Red circle with white fill: 2023",
@@ -1679,13 +1714,14 @@ regional_facet_plot <- regional_comparison %>%
     y = "TB Mortality (per 100,000)",
     caption = "Each panel shows one WHO region's trajectory over time | Free scales for better visibility"
   ) +
-  
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
     plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray60"),
-    strip.text = element_text(size = 10, face = "bold", 
-                              margin = margin(b = 5, t = 5)),
+    strip.text = element_text(
+      size = 10, face = "bold",
+      margin = margin(b = 5, t = 5)
+    ),
     strip.background = element_rect(fill = "gray95", color = NA),
     axis.title = element_text(size = 11, face = "bold"),
     axis.text = element_text(size = 9),
@@ -1698,9 +1734,10 @@ regional_facet_plot <- regional_comparison %>%
 print(regional_facet_plot)
 
 # Save the plot
-ggsave("output/tb_incidence_vs_mortality_facet_regional.png", 
-       plot = regional_facet_plot,
-       width = 15, height = 11, dpi = 300, bg = "white")
+ggsave("output/tb_incidence_vs_mortality_facet_regional.png",
+  plot = regional_facet_plot,
+  width = 15, height = 11, dpi = 300, bg = "white"
+)
 
 cat("\nFaceted regional incidence vs mortality plot saved as: output/tb_incidence_vs_mortality_facet_regional.png\n")
 ```
@@ -1715,7 +1752,6 @@ country_cfr_data <- tb_data %>%
   # Remove zero incidence to avoid division issues
   filter(e_inc_100k > 0) %>%
   mutate(year = as.numeric(year)) %>%
-  
   # Calculate CFR for each country-year
   mutate(cfr_country = (e_mort_100k / e_inc_100k) * 100)
 
@@ -1730,10 +1766,8 @@ regional_cfr_data <- tb_data %>%
   # Remove zero incidence to avoid division issues
   filter(e_inc_100k > 0) %>%
   mutate(year = as.numeric(year)) %>%
-  
   # Calculate CFR for each country-year
   mutate(cfr_country = (e_mort_100k / e_inc_100k) * 100) %>%
-  
   # Calculate regional averages by year
   group_by(g_whoregion, year) %>%
   summarise(
@@ -1747,31 +1781,35 @@ regional_cfr_data <- tb_data %>%
 
 # Display summary statistics
 cat("Regional CFR data summary:\n")
-print(regional_cfr_data %>% 
-      group_by(g_whoregion) %>% 
-      summarise(
-        years_available = paste(range(year), collapse = "-"),
-        avg_cfr = round(mean(mean_cfr, na.rm = TRUE), 2),
-        countries = round(mean(countries_count), 0),
-        .groups = "drop"
-      ))
+print(regional_cfr_data %>%
+  group_by(g_whoregion) %>%
+  summarise(
+    years_available = paste(range(year), collapse = "-"),
+    avg_cfr = round(mean(mean_cfr, na.rm = TRUE), 2),
+    countries = round(mean(countries_count), 0),
+    .groups = "drop"
+  ))
 
 # Create the facet grid plot with Timor-Leste
 regional_cfr_plot <- regional_cfr_data %>%
   ggplot(aes(x = year, y = mean_cfr)) +
-  
+
   # TIMOR-LESTE thin red line (added before smooth to appear behind)
-  geom_line(data = timor_cfr_data,
-            aes(y = cfr_country, group = country), 
-            color = "#E31A1C", size = 0.3, alpha = 0.9) +
-  
+  geom_line(
+    data = timor_cfr_data,
+    aes(y = cfr_country, group = country),
+    color = "#E31A1C", size = 0.3, alpha = 0.9
+  ) +
+
   # Add smooth trend line
-  geom_smooth(method = "loess", se = TRUE, alpha = 0.15, 
-              color = "#457B9D", fill = "#457B9D", size = 0.8) +
-  
+  geom_smooth(
+    method = "loess", se = TRUE, alpha = 0.15,
+    color = "#457B9D", fill = "#457B9D", size = 0.8
+  ) +
+
   # Separate panel for each region
   facet_wrap(~g_whoregion, scales = "free_y", ncol = 3) +
-  
+
   # Scale formatting
   scale_x_continuous(
     breaks = c(2015, 2018, 2021, 2023),
@@ -1781,7 +1819,7 @@ regional_cfr_plot <- regional_cfr_data %>%
     labels = function(x) paste0(round(x, 1), "%"),
     breaks = pretty_breaks(n = 5)
   ) +
-  
+
   # Labels and theme
   labs(
     title = "TB Case Fatality Rate Evolution by WHO Region (2015-2023)",
@@ -1790,13 +1828,14 @@ regional_cfr_plot <- regional_cfr_data %>%
     y = "Case Fatality Rate (%)",
     caption = "CFR = (Mortality per 100k / Incidence per 100k) × 100 | Source: WHO Global TB Database"
   ) +
-  
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
     plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray60"),
-    strip.text = element_text(size = 10, face = "bold", 
-                              margin = margin(b = 5, t = 5)),
+    strip.text = element_text(
+      size = 10, face = "bold",
+      margin = margin(b = 5, t = 5)
+    ),
     strip.background = element_rect(fill = "gray95", color = NA),
     axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
     axis.text.y = element_text(size = 9),
@@ -1809,9 +1848,10 @@ regional_cfr_plot <- regional_cfr_data %>%
 print(regional_cfr_plot)
 
 # Save the plot
-ggsave("output/tb_cfr_by_region_facet_timor.png", 
-       plot = regional_cfr_plot,
-       width = 14, height = 10, dpi = 300, bg = "white")
+ggsave("output/tb_cfr_by_region_facet_timor.png",
+  plot = regional_cfr_plot,
+  width = 14, height = 10, dpi = 300, bg = "white"
+)
 
 cat("\nRegional CFR facet plot with Timor-Leste saved as: output/tb_cfr_by_region_facet_timor.png\n")
 ```
@@ -1851,31 +1891,35 @@ regional_clean_data <- tb_data %>%
 
 # Display summary statistics
 cat("Regional mortality data summary:\n")
-print(regional_clean_data %>% 
-      group_by(g_whoregion) %>% 
-      summarise(
-        years_available = paste(range(year), collapse = "-"),
-        avg_mort = round(mean(mean_mort, na.rm = TRUE), 2),
-        countries = round(mean(countries_count), 0),
-        .groups = "drop"
-      ))
+print(regional_clean_data %>%
+  group_by(g_whoregion) %>%
+  summarise(
+    years_available = paste(range(year), collapse = "-"),
+    avg_mort = round(mean(mean_mort, na.rm = TRUE), 2),
+    countries = round(mean(countries_count), 0),
+    .groups = "drop"
+  ))
 
 # Create the facet grid plot with Timor-Leste
 regional_clean_plot <- regional_clean_data %>%
   ggplot(aes(x = year, y = mean_mort)) +
-  
+
   # TIMOR-LESTE thin red line (added before smooth to appear behind)
-  geom_line(data = timor_clean_data,
-            aes(y = e_mort_100k, group = country), 
-            color = "#E31A1C", size = 0.3, alpha = 0.9) +
-  
+  geom_line(
+    data = timor_clean_data,
+    aes(y = e_mort_100k, group = country),
+    color = "#E31A1C", size = 0.3, alpha = 0.9
+  ) +
+
   # Add smooth trend line
-  geom_smooth(method = "loess", se = TRUE, alpha = 0.15, 
-              color = "#457B9D", fill = "#457B9D", size = 0.8) +
-  
+  geom_smooth(
+    method = "loess", se = TRUE, alpha = 0.15,
+    color = "#457B9D", fill = "#457B9D", size = 0.8
+  ) +
+
   # Separate panel for each region
   facet_wrap(~g_whoregion, scales = "free_y", ncol = 3) +
-  
+
   # Scale formatting
   scale_x_continuous(
     breaks = c(2015, 2018, 2021, 2023),
@@ -1885,7 +1929,7 @@ regional_clean_plot <- regional_clean_data %>%
     labels = function(x) paste0(round(x, 1), "%"),
     breaks = pretty_breaks(n = 5)
   ) +
-  
+
   # Labels and theme
   labs(
     title = "TB Case Mortality Rate Evolution by WHO Region (2015-2023)",
@@ -1894,13 +1938,14 @@ regional_clean_plot <- regional_clean_data %>%
     y = "Case Mortality Rate (%)",
     caption = "Source: WHO Global TB Database"
   ) +
-  
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
     plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray60"),
-    strip.text = element_text(size = 10, face = "bold", 
-                              margin = margin(b = 5, t = 5)),
+    strip.text = element_text(
+      size = 10, face = "bold",
+      margin = margin(b = 5, t = 5)
+    ),
     strip.background = element_rect(fill = "gray95", color = NA),
     axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
     axis.text.y = element_text(size = 9),
@@ -1913,9 +1958,10 @@ regional_clean_plot <- regional_clean_data %>%
 print(regional_clean_plot)
 
 # Save the plot
-ggsave("output/tb_clean_by_region_facet_timor.png", 
-       plot = regional_clean_plot,
-       width = 14, height = 10, dpi = 300, bg = "white")
+ggsave("output/tb_clean_by_region_facet_timor.png",
+  plot = regional_clean_plot,
+  width = 14, height = 10, dpi = 300, bg = "white"
+)
 
 cat("\nRegional facet plot with Timor-Leste saved as: output/tb_clean_by_region_facet_timor.png\n")
 ```
@@ -1930,7 +1976,6 @@ country_cfr_data <- tb_data %>%
   # Remove zero incidence to avoid division issues
   filter(e_inc_100k > 0) %>%
   mutate(year = as.numeric(year)) %>%
-  
   # Calculate CFR for each country-year
   mutate(cfr_country = (e_mort_100k / e_inc_100k) * 100)
 
@@ -1941,32 +1986,36 @@ regional_cfr_plot_clean <- country_cfr_data %>%
     country == "Timor-Leste" ~ "Timor-Leste",
     TRUE ~ "Other Countries"
   )) %>%
-  
   ggplot(aes(x = year, y = cfr_country)) +
-  
+
   # Individual country trajectories (background)
-  geom_line(data = . %>% filter(country_type == "Other Countries"),
-            aes(group = country), 
-            alpha = 0.15, color = "gray50", size = 0.3) +
-  
+  geom_line(
+    data = . %>% filter(country_type == "Other Countries"),
+    aes(group = country),
+    alpha = 0.15, color = "gray50", size = 0.3
+  ) +
+
   # Timor-Leste highlighted
-  geom_line(data = . %>% filter(country_type == "Timor-Leste"),
-            aes(group = country), 
-            color = "#E31A1C", size = 0.3, alpha = 0.9) +
-  
+  geom_line(
+    data = . %>% filter(country_type == "Timor-Leste"),
+    aes(group = country),
+    color = "#E31A1C", size = 0.3, alpha = 0.9
+  ) +
+
   # Regional average
-  geom_line(data = regional_cfr_data,
-            aes(y = mean_cfr, group = 1), 
-            color = "#2E86AB", size = 1.2, alpha = 0.9) +
-  geom_point(data = regional_cfr_data,
-             aes(y = mean_cfr), 
-             color = "#2E86AB", size = 2, alpha = 0.9) +
-  
+  geom_line(
+    data = regional_cfr_data,
+    aes(y = mean_cfr, group = 1),
+    color = "#2E86AB", size = 1.2, alpha = 0.9
+  ) +
+  geom_point(
+    data = regional_cfr_data,
+    aes(y = mean_cfr),
+    color = "#2E86AB", size = 2, alpha = 0.9
+  ) +
   facet_wrap(~g_whoregion, scales = "free_y", ncol = 3) +
-  
   scale_x_continuous(breaks = c(2015, 2018, 2021, 2023)) +
   scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
-  
   labs(
     title = "TB Case Fatality Rate: Regional Patterns and Country Variations (2015-2023)",
     subtitle = "Each panel shows individual country trajectories within the region",
@@ -1974,7 +2023,6 @@ regional_cfr_plot_clean <- country_cfr_data %>%
     y = "Case Fatality Rate (%)",
     caption = "Blue: Regional average | Red: Timor-Leste | Grey: Other countries | CFR = Mortality/Incidence x 100"
   ) +
-  
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
@@ -1990,7 +2038,6 @@ print(regional_cfr_plot_clean)
 ```
 
 ```{r}
-
 # Alternative version with improved legend
 regional_mort_plot_clean <- country_clean_data %>%
   # Add grouping variable for better legend control
@@ -1998,32 +2045,36 @@ regional_mort_plot_clean <- country_clean_data %>%
     country == "Timor-Leste" ~ "Timor-Leste",
     TRUE ~ "Other Countries"
   )) %>%
-  
   ggplot(aes(x = year, y = e_mort_100k)) +
-  
+
   # Individual country trajectories (background)
-  geom_line(data = . %>% filter(country_type == "Other Countries"),
-            aes(group = country), 
-            alpha = 0.15, color = "gray50", size = 0.3) +
-  
+  geom_line(
+    data = . %>% filter(country_type == "Other Countries"),
+    aes(group = country),
+    alpha = 0.15, color = "gray50", size = 0.3
+  ) +
+
   # Timor-Leste highlighted
-  geom_line(data = . %>% filter(country_type == "Timor-Leste"),
-            aes(group = country), 
-            color = "#E31A1C", size = 0.3, alpha = 0.9) +
-  
+  geom_line(
+    data = . %>% filter(country_type == "Timor-Leste"),
+    aes(group = country),
+    color = "#E31A1C", size = 0.3, alpha = 0.9
+  ) +
+
   # Regional average
-  geom_line(data = regional_clean_data,
-            aes(y = mean_mort, group = 1), 
-            color = "#2E86AB", size = 1.2, alpha = 0.9) +
-  geom_point(data = regional_clean_data,
-             aes(y = mean_mort), 
-             color = "#2E86AB", size = 2, alpha = 0.9) +
-  
+  geom_line(
+    data = regional_clean_data,
+    aes(y = mean_mort, group = 1),
+    color = "#2E86AB", size = 1.2, alpha = 0.9
+  ) +
+  geom_point(
+    data = regional_clean_data,
+    aes(y = mean_mort),
+    color = "#2E86AB", size = 2, alpha = 0.9
+  ) +
   facet_wrap(~g_whoregion, scales = "free_y", ncol = 3) +
-  
   scale_x_continuous(breaks = c(2015, 2018, 2021, 2023)) +
   scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
-  
   labs(
     title = "TB Case Mortality Rate: Regional Patterns and Country Variations (2015-2023)",
     subtitle = "Each panel shows individual country trajectories within the region",
@@ -2031,7 +2082,6 @@ regional_mort_plot_clean <- country_clean_data %>%
     y = "Case Mortality Rate (%)",
     caption = "Blue: Regional average | Red: Timor-Leste | Grey: Other countries"
   ) +
-  
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
@@ -2142,7 +2192,7 @@ faceted_correlation_plot <- correlation_by_region %>%
     limit = c(-1, 1),
     name = "Correlation"
   ) +
-  facet_wrap(~ region, scales = "free", ncol = 2) +
+  facet_wrap(~region, scales = "free", ncol = 2) +
   theme_minimal() +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
@@ -2195,7 +2245,7 @@ simplified_correlation_plot <- tb_clean %>%
     low = "blue", mid = "white", high = "red",
     midpoint = 0, name = "Correlation"
   ) +
-  facet_wrap(~ region, ncol = 3) +
+  facet_wrap(~region, ncol = 3) +
   theme_minimal() +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
@@ -2245,15 +2295,14 @@ Multi-level correlation analysis
 ```{r}
 # Multi-level correlation analysis
 correlation_analyses <- list(
-  global = tb_clean %>% 
+  global = tb_clean %>%
     select(where(is.numeric), -year) %>%
     cor(use = "pairwise.complete.obs"),
-    
   by_region = tb_clean %>%
     group_by(g_whoregion) %>%
-    group_map(~ cor(select(.x, where(is.numeric), -year), 
-                    use = "pairwise.complete.obs")),
-                    
+    group_map(~ cor(select(.x, where(is.numeric), -year),
+      use = "pairwise.complete.obs"
+    )),
   timor_leste_focus = tb_clean %>%
     filter(country == "Timor-Leste") %>%
     select(where(is.numeric), -year) %>%
@@ -2270,7 +2319,7 @@ timor_leste_correlations_long <- correlation_analyses$timor_leste_focus %>%
   rownames_to_column(var = "variable1") %>%
   pivot_longer(
     cols = -variable1,
-    names_to = "variable2", 
+    names_to = "variable2",
     values_to = "correlation"
   ) %>%
   # Remove duplicate pairs (since correlation matrix is symmetric)
@@ -2289,8 +2338,10 @@ Simple one-line export
 
 ```{r}
 # Simple one-line export
-write_csv(correlation_analyses$timor_leste_focus %>% as.data.frame() %>% rownames_to_column("variable"), 
-          "output/timor_leste_correlations_simple.csv")
+write_csv(
+  correlation_analyses$timor_leste_focus %>% as.data.frame() %>% rownames_to_column("variable"),
+  "output/timor_leste_correlations_simple.csv"
+)
 ```
 
 ## Phase 3. Multivariate analysis
@@ -2327,17 +2378,17 @@ glimpse(tb_clean)
 model_data <- tb_clean %>%
   select(
     # Identifier variables
-    iso3, 
-    country, 
+    iso3,
+    country,
     year,
-    
+
     # Target variable (Y)
     e_mort_100k,
-    
+
     # Predictor variables (X)
-    c_cdr,             # Case detection rate
+    c_cdr, # Case detection rate
     rcvd_tot_domestic, # Domestic funding
-    rr_new,            # Drug resistance indicator
+    rr_new, # Drug resistance indicator
     bmu_community_impl # Number of Basic Management Units with data on referrals
   )
 
@@ -2371,7 +2422,7 @@ fe_model <- plm(
   formula = fe_formula,
   data = p_data,
   model = "within",
-  effect = "twoways" 
+  effect = "twoways"
 )
 ```
 
@@ -2402,7 +2453,7 @@ Simple regression model for Timor-Leste to compare with global trends
 
 ```{r}
 # 1. Filter your clean data for Timor-Leste only
-# Using 'iso3' is safest, assuming Timor-Leste's code is 'TLS'. 
+# Using 'iso3' is safest, assuming Timor-Leste's code is 'TLS'.
 # If not, use country == "Timor-Leste".
 timor_data <- tb_clean %>%
   filter(iso3 == "TLS")
@@ -2422,18 +2473,18 @@ ggplot(timor_data, aes(x = year)) +
   # Plot Incidence Rate (e_inc_100k) on the primary Y-axis
   geom_line(aes(y = e_mort_100k, color = "Mortality Rate"), size = 1.2) +
   geom_point(aes(y = e_mort_100k, color = "Mortality Rate"), size = 2.5) +
-  
+
   # Plot Case Detection Rate (c_cdr) on the secondary Y-axis
   # We apply the scaling factor here
   geom_line(aes(y = c_cdr * scale_factor, color = "Case Detection Rate"), size = 1.2, linetype = "dashed") +
   geom_point(aes(y = c_cdr * scale_factor, color = "Case Detection Rate"), size = 2.5) +
-  
+
   # Define the secondary Y-axis by "un-scaling" the values
   scale_y_continuous(
     name = "Estimated Mortality per 100k",
-    sec.axis = sec_axis(~./scale_factor, name = "Case Detection Rate (%)")
+    sec.axis = sec_axis(~ . / scale_factor, name = "Case Detection Rate (%)")
   ) +
-  
+
   # Add titles and clean up the theme
   labs(
     title = "TB Mortality Rate vs. Case Detection in Timor-Leste (2015-2023)",
@@ -2448,7 +2499,6 @@ ggplot(timor_data, aes(x = year)) +
 ```
 
 ```{r}
-
 tb_dual_data <- tb_clean %>%
   group_by(year) %>%
   summarise(
@@ -2473,18 +2523,18 @@ ggplot(tb_dual_data, aes(x = year)) +
   # Plot Incidence Rate (e_inc_100k) on the primary Y-axis
   geom_line(aes(y = mean_mortality, color = "Mortality Rate"), size = 1.2) +
   geom_point(aes(y = mean_mortality, color = "Mortality Rate"), size = 2.5) +
-  
+
   # Plot Case Detection Rate (c_cdr) on the secondary Y-axis
   # We apply the scaling factor here
   geom_line(aes(y = mean_cdr * scale_factor, color = "Case Detection Rate"), size = 1.2, linetype = "dashed") +
   geom_point(aes(y = mean_cdr * scale_factor, color = "Case Detection Rate"), size = 2.5) +
-  
+
   # Define the secondary Y-axis by "un-scaling" the values
   scale_y_continuous(
     name = "Estimated Mortality per 100k",
-    sec.axis = sec_axis(~./scale_factor, name = "Case Detection Rate (%)")
+    sec.axis = sec_axis(~ . / scale_factor, name = "Case Detection Rate (%)")
   ) +
-  
+
   # Add titles and clean up the theme
   labs(
     title = "Global TB Mortality Rate vs. Case Detection (2015-2023)",
@@ -2509,8 +2559,10 @@ augmented_data <- augment(fe_model, data = p_data)
 # 2. Filter for Timor-Leste
 timor_augmented <- augmented_data %>%
   # Use .rownames to get back your original identifiers
-  mutate(iso3 = sub("-.*", "", .rownames),
-         year = as.numeric(sub(".*-", "", .rownames))) %>%
+  mutate(
+    iso3 = sub("-.*", "", .rownames),
+    year = as.numeric(sub(".*-", "", .rownames))
+  ) %>%
   filter(iso3 == "TLS") %>%
   # Rename columns for clarity
   rename(
@@ -2600,7 +2652,7 @@ Year 2018
 ```{r}
 # Build the tree model for 2018
 tree_2018 <- rpart(
-  tree_formula, 
+  tree_formula,
   data = data_2018,
   control = rpart.control(cp = 0.01) # Prunes the tree to keep it simple
 )
@@ -2608,7 +2660,7 @@ tree_2018 <- rpart(
 # Create the beautiful flowchart plot
 rpart.plot(
   tree_2018,
-  type = 2, 
+  type = 2,
   extra = 101, # Shows the average value and percentage of observations
   box.palette = "BuGn", # Use a nice color palette
   nn = TRUE, # Show node numbers
@@ -2621,7 +2673,7 @@ Year 2019
 ```{r}
 # Build the tree model for 2019
 tree_2019 <- rpart(
-  tree_formula, 
+  tree_formula,
   data = data_2019,
   control = rpart.control(cp = 0.01)
 )
@@ -2629,7 +2681,7 @@ tree_2019 <- rpart(
 # Plot the flowchart
 rpart.plot(
   tree_2019,
-  type = 2, extra = 101, box.palette = "OrRd", 
+  type = 2, extra = 101, box.palette = "OrRd",
   nn = TRUE,
   main = "TB Fatality Rate Drivers in 2019 (Pre-Pandemic)"
 )
@@ -2640,7 +2692,7 @@ Year 2020
 ```{r}
 # Build the tree model for 2020
 tree_2020 <- rpart(
-  tree_formula, 
+  tree_formula,
   data = data_2020,
   control = rpart.control(cp = 0.01)
 )
@@ -2659,7 +2711,7 @@ Year 2021
 ```{r}
 # Build the tree model for 2021
 tree_2021 <- rpart(
-  tree_formula, 
+  tree_formula,
   data = data_2021,
   control = rpart.control(cp = 0.01)
 )
@@ -2678,7 +2730,7 @@ Year 2022
 ```{r}
 # Build the tree model for 2022
 tree_2022 <- rpart(
-  tree_formula, 
+  tree_formula,
   data = data_2022,
   control = rpart.control(cp = 0.01)
 )
@@ -2697,7 +2749,7 @@ Year 2023
 ```{r}
 # Build the tree model for 2023
 tree_2023 <- rpart(
-  tree_formula, 
+  tree_formula,
   data = data_2023,
   control = rpart.control(cp = 0.01)
 )
@@ -2721,11 +2773,11 @@ library(ggrepel) # For non-overlapping labels in plots
 # 1. Define the variables that will define your "TB Profile"
 # It's good to pick key outcome and input variables.
 profile_vars <- c(
-  'e_mort_100k',        # Case Mortality Rate
-  'c_cdr',             # Case Detection Rate
-  'rcvd_tot_domestic', # Domestic Funding
-  'rr_new',             # Drug Resistance Burden
-  'bmu_community_impl' # Community referral units
+  "e_mort_100k", # Case Mortality Rate
+  "c_cdr", # Case Detection Rate
+  "rcvd_tot_domestic", # Domestic Funding
+  "rr_new", # Drug Resistance Burden
+  "bmu_community_impl" # Community referral units
 )
 
 # 2. Prepare the 2018 data
@@ -2754,8 +2806,8 @@ data_2018_scaled$iso3 <- data_2018$iso3
 ```{r}
 # Run the PCA on the scaled data (excluding identifier columns)
 pca_result <- prcomp(
-  data_2018_scaled %>% select(-country, -iso3), 
-  center = TRUE, 
+  data_2018_scaled %>% select(-country, -iso3),
+  center = TRUE,
   scale. = TRUE
 )
 
@@ -2799,11 +2851,11 @@ library(ggrepel) # For non-overlapping labels in plots
 ```{r}
 # 1. Prepare data (same as before)
 profile_vars <- c(
-  'e_mort_100k',        # Case Mortality Rate
-  'c_cdr',             # Case Detection Rate
-  'rcvd_tot_domestic', # Domestic Funding
-  'rr_new',             # Drug Resistance Burden
-  'bmu_community_impl' # Community referral units
+  "e_mort_100k", # Case Mortality Rate
+  "c_cdr", # Case Detection Rate
+  "rcvd_tot_domestic", # Domestic Funding
+  "rr_new", # Drug Resistance Burden
+  "bmu_community_impl" # Community referral units
 )
 
 data_for_clustering <- tb_clean %>%
@@ -2829,11 +2881,11 @@ data_for_clustering
 ```{r}
 # 1. Calculate the "distance" between every pair of countries
 # 'euclidean' is the standard, straight-line distance between points in space.
-dist_matrix <- dist(data_scaled, method = 'euclidean')
+dist_matrix <- dist(data_scaled, method = "euclidean")
 
 # 2. Run the hierarchical clustering algorithm
 # 'ward.D2' is a very effective method that tends to create compact, well-separated clusters.
-hclust_result <- hclust(dist_matrix, method = 'ward.D2')
+hclust_result <- hclust(dist_matrix, method = "ward.D2")
 ```
 
 #### Step 4: Visualize and Interpret
@@ -2841,7 +2893,7 @@ hclust_result <- hclust(dist_matrix, method = 'ward.D2')
 ```{r}
 # Plot the dendrogram (the "family tree")
 plot(
-  hclust_result, 
+  hclust_result,
   main = "Dendrogram of Country Clusters (2019 TB Profile)",
   xlab = "Countries",
   ylab = "Height (Dissimilarity)",
@@ -2857,7 +2909,7 @@ rect.hclust(hclust_result, k = 5, border = "red")
 
 ```{r}
 # 1. "Cut" the tree to create a specific number of clusters.
-# Choosing 'k' (the number of clusters) is part art, part science. 
+# Choosing 'k' (the number of clusters) is part art, part science.
 # Look at the dendrogram to see what number makes sense. # Let's use k=5 as an example
 clusters_vector <- cutree(hclust_result, k = 5)
 
@@ -2894,11 +2946,11 @@ print(cluster_profile)
 ```{r}
 # 1. Prepare data (same as before)
 profile_vars <- c(
-  'e_mort_100k',        # Case Mortality Rate
-  'c_cdr',             # Case Detection Rate
-  'rcvd_tot_domestic', # Domestic Funding
-  'rr_new',             # Drug Resistance Burden
-  'bmu_community_impl' # Community referral units
+  "e_mort_100k", # Case Mortality Rate
+  "c_cdr", # Case Detection Rate
+  "rcvd_tot_domestic", # Domestic Funding
+  "rr_new", # Drug Resistance Burden
+  "bmu_community_impl" # Community referral units
 )
 
 data_for_clustering <- tb_clean %>%
@@ -2916,15 +2968,15 @@ rownames(data_scaled) <- data_for_clustering$country
 
 # 1. Calculate the "distance" between every pair of countries
 # 'euclidean' is the standard, straight-line distance between points in space.
-dist_matrix <- dist(data_scaled, method = 'euclidean')
+dist_matrix <- dist(data_scaled, method = "euclidean")
 
 # 2. Run the hierarchical clustering algorithm
 # 'ward.D2' is a very effective method that tends to create compact, well-separated clusters.
-hclust_result <- hclust(dist_matrix, method = 'ward.D2')
+hclust_result <- hclust(dist_matrix, method = "ward.D2")
 
 # Plot the dendrogram (the "family tree")
 plot(
-  hclust_result, 
+  hclust_result,
   main = "Dendrogram of Country Clusters (2019 TB Profile)",
   xlab = "Countries",
   ylab = "Height (Dissimilarity)",
@@ -2938,7 +2990,7 @@ rect.hclust(hclust_result, k = 5, border = "red")
 
 ```{r}
 # 1. "Cut" the tree to create a specific number of clusters.
-# Choosing 'k' (the number of clusters) is part art, part science. 
+# Choosing 'k' (the number of clusters) is part art, part science.
 # Look at the dendrogram to see what number makes sense. # Let's use k=5 as an example
 clusters_vector <- cutree(hclust_result, k = 5)
 
@@ -2996,7 +3048,7 @@ model_data_SEA_2018 <- data_SEA_2018 %>%
   select(
     # Target variable (Y)
     e_mort_100k,
-    
+
     # Predictor variables (X)
     c_cdr,
     rcvd_tot_domestic,
@@ -3010,7 +3062,7 @@ model_data_AFR_2018 <- data_AFR_2018 %>%
   select(
     # Target variable (Y)
     e_mort_100k,
-    
+
     # Predictor variables (X)
     c_cdr,
     rcvd_tot_domestic,
@@ -3072,7 +3124,7 @@ model_data_SEA_2023 <- data_SEA_2023 %>%
   select(
     # Target variable (Y)
     e_mort_100k,
-    
+
     # Predictor variables (X)
     c_cdr,
     rcvd_tot_domestic,
@@ -3086,7 +3138,7 @@ model_data_AFR_2023 <- data_AFR_2023 %>%
   select(
     # Target variable (Y)
     e_mort_100k,
-    
+
     # Predictor variables (X)
     c_cdr,
     rcvd_tot_domestic,
