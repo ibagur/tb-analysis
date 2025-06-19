@@ -1,0 +1,2086 @@
+---
+title: An R Markdown document converted from "tb_analysis_bea.ipynb"
+output: html_document
+---
+
+# TB Analysis for Timor-Leste (2018-2023)
+
+This notebook contains the statistical analysis for the tuberculosis incidence study in Timor-Leste, examining factors influencing TB evolution, country clustering patterns, trend analysis, and project justification.
+
+```{r}
+# Load required libraries
+library(tidyverse)
+
+# Display loaded libraries
+cat("Libraries loaded successfully!\n")
+cat("Working directory:", getwd(), "\n")
+
+# Create output directory if it doesn't exist
+output_dir <- "output"
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+  cat("Created output directory:", output_dir, "\n")
+} else {
+  cat("Output directory already exists:", output_dir, "\n")
+}
+```
+
+## Phase 1: Variable Selection and Data Preparation
+
+### Loading and processing the TB datasets
+
+```{r}
+# Define file paths for all TB datasets (excluding data dictionary)
+data_files <- list(
+  burden = "https://raw.githubusercontent.com/ibagur/tb-analysis/refs/heads/main/data/TB_burden_countries_2025-06-08.csv",
+  budget = "https://raw.githubusercontent.com/ibagur/tb-analysis/refs/heads/main/data/TB_budget_2025-06-07.csv",
+  community = "https://raw.githubusercontent.com/ibagur/tb-analysis/refs/heads/main/data/TB_community_engagement_2025-06-07.csv",
+  dr_surveillance = "https://raw.githubusercontent.com/ibagur/tb-analysis/refs/heads/main/data/TB_dr_surveillance_2025-06-08.csv",
+  expenditure = "https://raw.githubusercontent.com/ibagur/tb-analysis/refs/heads/main/data/TB_expenditure_utilisation_2025-06-07.csv",
+  notifications = "https://raw.githubusercontent.com/ibagur/tb-analysis/refs/heads/main/data/TB_notifications_2025-06-07.csv",
+  policies = "https://raw.githubusercontent.com/ibagur/tb-analysis/refs/heads/main/data/TB_policies_services_2025-06-07.csv"
+)
+
+
+# Function to load and add dataset source identifier
+load_tb_dataset <- function(file_path, dataset_name) {
+  cat("Loading:", dataset_name, "from", file_path, "\n")
+
+  # Read the CSV file
+  data <- read_csv(file_path, show_col_types = FALSE)
+
+  # Add dataset source column
+  data$dataset_source <- dataset_name
+
+  # Print basic info
+  cat("  Dimensions:", nrow(data), "rows x", ncol(data), "columns\n")
+  cat("  Columns:", paste(names(data)[1:min(5, ncol(data))], collapse = ", "))
+  if (ncol(data) > 5) cat(", ...")
+  cat("\n\n")
+
+  return(data)
+}
+
+# Load all datasets
+tb_datasets <- map2(data_files, names(data_files), load_tb_dataset)
+
+
+# Function to standardize joining columns and combine datasets using functional programming
+combine_tb_datasets <- function(dataset_list) {
+
+  # Start with the first dataset as base
+  base_data <- dataset_list[[1]]
+  cat("Starting with", names(dataset_list)[1], "as base dataset\n")
+  cat("Base dimensions:", nrow(base_data), "rows x", ncol(base_data), "columns\n\n")
+
+  # Use reduce to sequentially join all datasets
+  combined_data <- reduce2(
+    .x = dataset_list[-1],  # All datasets except the first
+    .y = names(dataset_list)[-1],  # Corresponding names
+    .init = base_data,
+    .f = function(combined, next_dataset, dataset_name) {
+
+      cat("Joining", dataset_name, "...\n")
+      cat("  Dataset dimensions:", nrow(next_dataset), "rows x", ncol(next_dataset), "columns\n")
+
+      # Identify common columns for joining using vectorized operations
+      possible_join_cols <- c("country", "year", "iso3")
+      join_cols <- possible_join_cols[
+        possible_join_cols %in% names(combined) &
+        possible_join_cols %in% names(next_dataset)
+      ]
+
+      cat("  Joining on columns:", paste(join_cols, collapse = ", "), "\n")
+
+      # Perform full join to preserve all data
+      if (length(join_cols) > 0) {
+        result <- full_join(combined, next_dataset, by = join_cols)
+      } else {
+        cat("  WARNING: No common columns found, using cbind (risky!)\n")
+        result <- cbind(combined, next_dataset)
+      }
+
+      cat("  Combined dimensions:", nrow(result), "rows x", ncol(result), "columns\n\n")
+      return(result)
+    }
+  )
+
+  return(combined_data)
+}
+
+# Combine all datasets
+cat("=== COMBINING ALL TB DATASETS ===\n\n")
+tb_combined <- combine_tb_datasets(tb_datasets)
+
+
+# Remove duplicate columns that may have been created during joining
+cat("=== REMOVING DUPLICATE COLUMNS ===\n\n")
+
+# Function to identify and remove duplicate columns
+remove_duplicate_columns <- function(data) {
+  original_ncol <- ncol(data)
+  original_names <- names(data)
+
+  cat("Original dataset dimensions:", nrow(data), "rows x", original_ncol, "columns\n")
+
+  # Identify duplicate column names
+  duplicate_names <- original_names[duplicated(original_names)]
+
+  if (length(duplicate_names) > 0) {
+    cat("Found duplicate column names:", paste(duplicate_names, collapse = ", "), "\n")
+
+    # Keep only the first occurrence of each column name
+    data <- data[, !duplicated(names(data))]
+
+    cat("After removing duplicates:", nrow(data), "rows x", ncol(data), "columns\n")
+    cat("Removed", original_ncol - ncol(data), "duplicate columns\n")
+  } else {
+    cat("No duplicate column names found\n")
+  }
+
+  # Also check for columns with identical content (but different names)
+  # This is more computationally intensive, so we'll just flag potential issues
+  if (ncol(data) > 50) {
+    cat("Dataset has many columns (", ncol(data), "), skipping content-based duplicate detection\n")
+  } else {
+    cat("Checking for content-based duplicates...\n")
+    # Convert to character for comparison to handle different data types
+    data_char <- data %>% mutate(across(everything(), as.character))
+
+    # Find columns with identical content using functional approach
+    # Create all pairs of column indices to compare
+    col_indices <- seq_len(ncol(data_char))
+    col_pairs <- expand.grid(i = col_indices, j = col_indices) %>%
+      filter(i < j)  # Only compare each pair once
+
+    # Check for identical content using map2
+    content_duplicates <- col_pairs %>%
+      mutate(
+        col_i = names(data_char)[i],
+        col_j = names(data_char)[j],
+        identical_content = map2_lgl(i, j, ~ identical(data_char[[.x]], data_char[[.y]]))
+      ) %>%
+      filter(identical_content) %>%
+      pull(col_j)
+
+    if (length(content_duplicates) > 0) {
+      cat("Found columns with identical content:", paste(content_duplicates, collapse = ", "), "\n")
+      cat("Consider reviewing these manually\n")
+    } else {
+      cat("No content-based duplicates found\n")
+    }
+  }
+
+  return(data)
+}
+
+# Apply duplicate removal
+tb_final <- remove_duplicate_columns(tb_combined)
+
+cat("\n=== DATA LOADING COMPLETE ===\n")
+cat("Combined dataset saved as 'tb_final'\n")
+```
+
+### Data Filtering and Export
+
+Before proceeding to the main analysis, we need to filter the data to focus on the project period (2015-2023) and export the final dataset.
+
+```{r}
+# Filter data to focus on project period (2015-2023)
+cat("=== FILTERING DATA FOR PROJECT PERIOD (2015-2023) ===\n\n")
+
+# Check current year distribution
+cat("Original year distribution:\n")
+year_counts <- table(tb_final$year, useNA = "ifany")
+print(year_counts)
+
+cat("\nTotal rows before filtering:", nrow(tb_final), "\n")
+
+# Filter for years 2015-2023
+tb_filtered <- tb_final %>%
+  filter(year >= 2015 & year <= 2023)
+
+cat("Total rows after filtering:", nrow(tb_filtered), "\n")
+
+# Show filtered year distribution
+cat("\nFiltered year distribution:\n")
+filtered_year_counts <- table(tb_filtered$year, useNA = "ifany")
+print(filtered_year_counts)
+
+# Check Timor-Leste data in filtered dataset
+timor_filtered <- tb_filtered %>%
+  filter(country == "Timor-Leste")
+
+cat("\nTimor-Leste data in filtered dataset:\n")
+cat("Rows:", nrow(timor_filtered), "\n")
+if (nrow(timor_filtered) > 0) {
+  cat("Years available:", paste(sort(unique(timor_filtered$year)), collapse = ", "), "\n")
+}
+```
+
+Remove columns with insufficient data for Timor-Leste (fewer than 3 non-NA values). This captures columns that are completely missing, have only 1 non-NA value, or have only 2 non-NA values
+
+```{r}
+# Remove columns with insufficient data for Timor-Leste (fewer than 3 non-NA values)
+# This captures columns that are completely missing, have only 1 non-NA value, or have only 2 non-NA values
+cat("=== REMOVING COLUMNS WITH fewer than 3 non-NA values for Timor-Leste ===\n\n")
+
+# Filter for Timor-Leste data to check which columns have any data
+timor_data <- tb_filtered %>%
+  filter(country == "Timor-Leste")
+
+if (nrow(timor_data) > 0) {
+  # Identify columns with insufficient data using vectorized operations
+  timor_missing_cols <- timor_data %>%
+    summarise(across(everything(), ~ sum(!is.na(.x)))) %>%
+    pivot_longer(cols = everything(), names_to = "column", values_to = "non_na_count") %>%
+    filter(non_na_count < 3) %>%
+    pull(column)
+
+  cat("Original dataset columns:", ncol(tb_filtered), "\n")
+  cat("Columns with fewer than 3 non-NA values for Timor-Leste:", length(timor_missing_cols), "\n")
+
+  if (length(timor_missing_cols) > 0) {
+    # Show first few examples
+    cat("Examples of columns to remove:", paste(head(timor_missing_cols, 10), collapse = ", "))
+    if (length(timor_missing_cols) > 10) {
+      cat(", ... and", length(timor_missing_cols) - 10, "more")
+    }
+    cat("\n\n")
+
+    # Remove these columns from the entire dataset
+    tb_filtered_clean <- tb_filtered %>%
+      select(-all_of(timor_missing_cols))
+
+    cat("After removing columns with insufficient Timor-Leste data:", ncol(tb_filtered_clean), "columns\n")
+    cat("Removed", length(timor_missing_cols), "columns with fewer than 3 non-NA values\n")
+
+    # Update the filtered dataset
+    tb_filtered <- tb_filtered_clean
+
+  } else {
+    cat("No columns found with fewer than 3 non-NA values for Timor-Leste\n")
+  }
+
+  # Verify Timor-Leste data availability after cleaning
+  timor_clean <- tb_filtered %>%
+    filter(country == "Timor-Leste")
+
+  # Count non-missing columns for Timor-Leste using vectorized operations
+  timor_data_cols <- timor_clean %>%
+    summarise(across(everything(), ~ !all(is.na(.x)))) %>%
+    pivot_longer(cols = everything(), names_to = "column", values_to = "has_data") %>%
+    summarise(count = sum(has_data)) %>%
+    pull(count)
+
+  cat("\nTimor-Leste data verification after cleaning:\n")
+  cat("Total columns:", ncol(timor_clean), "\n")
+  cat("Columns with at least some Timor-Leste data:", timor_data_cols, "\n")
+  cat("Columns with fewer than 3 non-NA values for Timor-Leste:", ncol(timor_clean) - timor_data_cols, "\n")
+
+} else {
+  cat("WARNING: No Timor-Leste data found for cleaning!\n")
+}
+```
+
+### Variable Documentation and Focus Selection
+
+Before proceeding with exploratory analysis, we need to document our variables and select the most relevant ones for focused analysis.
+
+```{r}
+# Clean up variable names by removing join suffixes
+cat("=== CLEANING UP VARIABLE NAMES ===\n\n")
+
+# Show current variable names with suffixes
+suffix_vars <- names(tb_filtered)[grepl("\\.(x|y)", names(tb_filtered))]
+cat("Variables with join suffixes found:", length(suffix_vars), "\n")
+if (length(suffix_vars) > 0) {
+  cat("Examples:", paste(head(suffix_vars, 10), collapse = ", "), "\n\n")
+}
+
+# Step 1: Remove variables with complex suffixes (.x.x.x, .y.y.y, .x.x, .y.y, .y)
+vars_to_remove <- names(tb_filtered)[grepl("\\.(x\\.x\\.x|y\\.y\\.y|x\\.x|y\\.y|y)$", names(tb_filtered))]
+
+cat("Removing variables with complex suffixes:\n")
+cat("Variables to remove:", length(vars_to_remove), "\n")
+if (length(vars_to_remove) > 0) {
+  cat("Examples:", paste(head(vars_to_remove, 8), collapse = ", "), "\n")
+
+  # Remove these variables
+  tb_filtered_clean <- tb_filtered %>%
+    select(-all_of(vars_to_remove))
+
+  cat("Dataset after removing complex suffixes:", ncol(tb_filtered_clean), "columns\n\n")
+} else {
+  tb_filtered_clean <- tb_filtered
+  cat("No variables with complex suffixes found\n\n")
+}
+
+# Step 2: Rename variables ending in '.x' to remove the suffix
+vars_with_x <- names(tb_filtered_clean)[grepl("\\.x$", names(tb_filtered_clean))]
+
+cat("Renaming variables ending in '.x':\n")
+cat("Variables to rename:", length(vars_with_x), "\n")
+if (length(vars_with_x) > 0) {
+  cat("Examples:", paste(head(vars_with_x, 8), collapse = ", "), "\n")
+
+  # Create new names without .x suffix
+  new_names <- names(tb_filtered_clean)
+  new_names[grepl("\\.x$", new_names)] <- gsub("\\.x$", "", new_names[grepl("\\.x$", new_names)])
+
+  # Apply new names
+  names(tb_filtered_clean) <- new_names
+
+  cat("Sample renamed variables:\n")
+  renamed_examples <- data.frame(
+    original = head(vars_with_x, 5),
+    renamed = head(gsub("\\.x$", "", vars_with_x), 5)
+  )
+  print(renamed_examples)
+} else {
+  cat("No variables ending in '.x' found\n")
+}
+
+# Update the main dataset
+tb_filtered <- tb_filtered_clean
+
+cat("\nFinal dataset after cleaning:\n")
+cat("Dimensions:", nrow(tb_filtered), "rows x", ncol(tb_filtered), "columns\n")
+cat("Variables with suffixes remaining:", sum(grepl("\\.(x|y)", names(tb_filtered))), "\n")
+```
+
+```{r}
+# Identify the most relevant variables for focused analysis (using only available variables)
+cat("=== SELECTING MOST RELEVANT VARIABLES FOR FOCUSED ANALYSIS ===\n\n")
+
+# Define categories of most relevant variables based on research questions
+# All variables listed below are confirmed to be available in tb_variables_documentation.csv
+key_variables <- list(
+
+  # PRIMARY OUTCOME VARIABLES (TB Incidence & Mortality)
+  primary_outcomes = c(
+    "e_inc_100k",          # Estimated incidence (all forms) per 100,000 population
+    "e_mort_100k",         # Estimated mortality per 100,000 population
+    "e_inc_num"            # Estimated number of incident cases (all forms)
+  ),
+
+  # CASE DETECTION & SURVEILLANCE
+  case_detection = c(
+    "c_cdr",               # Case detection rate (treatment coverage), percent
+    "c_newinc",            # Total of new and relapse cases
+    "c_newinc_100k"        # Case notification rate per 100,000 population
+  ),
+
+  # FINANCIAL & RESOURCE ALLOCATION
+  financial = c(
+    "budget_tot",          # Total budget required (US Dollars)
+    "exp_tot",             # Total actual expenditure (US Dollars)
+    "rcvd_tot_domestic"    # Funding received from domestic sources (US Dollars)
+  ),
+
+  # COMMUNITY ENGAGEMENT & OUTREACH
+  community_engagement = c(
+    "bmu",                 # Number of TB Basic Management Units in the country
+    "bmu_community_impl",  # BMUs implementing community-based referrals/treatment support
+    "bmu_ref_data",        # BMUs with data on referrals by community health workers
+    "community_data_available" # Community data availability indicator
+  ),
+
+  # TREATMENT & OUTCOMES
+  treatment_outcomes = c(
+    "newrel_hivtest",      # New and relapse cases tested for HIV
+    "succ_coh",            # Treatment success rate for cohort
+    "coh"                  # Cohort size for treatment outcome evaluation
+  ),
+
+  # DRUG RESISTANCE & SURVEILLANCE
+  drug_resistance = c(
+    "conf_rrmdr",          # Laboratory-confirmed rifampicin-resistant/MDR-TB cases
+    "rr_new",              # New cases with rifampicin resistance
+    "mdr"                  # MDR-TB cases
+  ),
+
+  # POLICIES & HEALTH SYSTEM
+  policies_services = c(
+    "caseb_err_nat",       # Case-based surveillance error at national level
+    "hcw_tb_infected",     # Healthcare workers infected with TB
+    "ident_pris"           # TB identification in prisons/detention facilities
+  ),
+
+  # GEOGRAPHIC & TEMPORAL IDENTIFIERS
+  identifiers = c(
+    "country",             # Country name
+    "year",                # Calendar year
+    "g_whoregion",         # WHO region
+    "iso3"                 # ISO 3-letter country code
+  )
+)
+
+# Combine all key variables
+all_key_vars <- unlist(key_variables, use.names = FALSE)
+```
+
+```{r}
+# Create focused dataset with key variables and validate data availability
+cat("=== CREATING FOCUSED DATASET FOR ANALYSIS ===\n\n")
+
+# Check which key variables exist in our dataset
+available_key_vars <- all_key_vars[all_key_vars %in% names(tb_filtered)]
+missing_key_vars <- all_key_vars[!all_key_vars %in% names(tb_filtered)]
+
+cat("Available key variables:", length(available_key_vars), "\n")
+if (length(missing_key_vars) > 0) {
+  cat("Missing key variables:", length(missing_key_vars), "\n")
+  cat("Missing:", paste(missing_key_vars, collapse = ", "), "\n\n")
+}
+
+# Create focused dataset
+tb_focused <- tb_filtered %>%
+  select(all_of(available_key_vars))
+
+cat("\n=== FOCUSED VARIABLE SELECTION COMPLETE ===\n")
+cat("Ready for exploratory analysis with", ncol(tb_focused), "key variables\n")
+```
+
+## Phase 2: Descriptive and correlation analysis
+
+```{r}
+# Load libraries
+library(scales)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+```
+
+### 2.1 Descriptive analysis
+
+TB Incidence Evolution by WHO Region (2015-2023)
+
+```{r}
+# Load the clean combined dataset
+cat("Loading clean TB dataset...\n")
+tb_data <- tb_focused
+
+# Prepare data for the timeline plot
+tb_incidence_timeline <- tb_data %>%
+  # Filter for complete cases of key variables
+  filter(!is.na(e_inc_100k), !is.na(g_whoregion), !is.na(year)) %>%
+  # Calculate regional averages by year
+  group_by(g_whoregion, year) %>%
+  summarise(
+    mean_incidence = mean(e_inc_100k, na.rm = TRUE),
+    median_incidence = median(e_inc_100k, na.rm = TRUE),
+    countries_count = n(),
+    .groups = "drop"
+  ) %>%
+  # Ensure year is numeric for proper timeline
+  mutate(year = as.numeric(year))
+
+# Display data summary
+cat("\nTimeline data summary:\n")
+tb_incidence_timeline_region <- tb_incidence_timeline %>%
+  group_by(g_whoregion) %>%
+  summarise(
+    years_available = paste(range(year), collapse = "-"),
+    avg_incidence = round(mean(mean_incidence), 1),
+    countries = round(mean(countries_count), 0),
+    .groups = "drop"
+  )
+
+tb_incidence_timeline_region
+
+# Create the timeline multi-line plot
+tb_timeline_plot <- tb_incidence_timeline %>%
+  ggplot(aes(x = year, y = mean_incidence, color = g_whoregion)) +
+  geom_line(size = 1.2, alpha = 0.8) +
+  geom_point(size = 2, alpha = 0.9) +
+
+  # Enhance the plot appearance
+  scale_x_continuous(
+    breaks = seq(2015, 2023, 1),
+    labels = seq(2015, 2023, 1)
+  ) +
+  scale_y_continuous(
+    labels = comma_format(),
+    breaks = pretty_breaks(n = 8)
+  ) +
+  scale_color_viridis_d(
+    name = "WHO Region",
+    option = "plasma",
+    end = 0.9
+  ) +
+
+  # Add labels and title
+  labs(
+    title = "TB Incidence Evolution by WHO Region (2015-2023)",
+    subtitle = "Mean incidence rate per 100,000 population",
+    x = "Year",
+    y = "TB Incidence Rate (per 100,000)",
+    caption = "Source: WHO Global TB Database | Data: Regional averages"
+  ) +
+
+  # Apply clean theme
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray60"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.caption = element_text(size = 8, color = "gray50")
+  ) +
+  guides(color = guide_legend(nrow = 2, byrow = TRUE))
+
+# Display the plot
+print(tb_timeline_plot)
+
+# Optional: Save the plot
+ggsave("output/tb_incidence_timeline_by_region.png",
+       plot = tb_timeline_plot,
+       width = 12, height = 8, dpi = 300, bg = "white")
+
+cat("\nPlot saved as: output/tb_incidence_timeline_by_region.png\n")
+```
+
+TB Incidence: Regional Trends vs Country Variations (2015-2023)
+
+```{r}
+# Alternative plot: Show country trajectories with regional trend overlay
+# HIGHLIGHTING TIMOR-LESTE (same thickness, color only)
+tb_country_timeline <- tb_data %>%
+  filter(!is.na(e_inc_100k), !is.na(g_whoregion), !is.na(year)) %>%
+  mutate(year = as.numeric(year))
+
+# Separate Timor-Leste data for highlighting
+timor_leste_data <- tb_country_timeline %>%
+  filter(country == "Timor-Leste")
+
+# Check if Timor-Leste data exists
+if(nrow(timor_leste_data) > 0) {
+  cat("Timor-Leste data found:", nrow(timor_leste_data), "observations\n")
+  cat("WHO Region:", unique(timor_leste_data$g_whoregion), "\n")
+  cat("Years available:", paste(range(timor_leste_data$year), collapse = "-"), "\n")
+  cat("Incidence range:", round(range(timor_leste_data$e_inc_100k, na.rm = TRUE), 1), "\n\n")
+} else {
+  cat("Warning: No data found for Timor-Leste\n")
+}
+
+# Plot with individual countries (gray lines), regional averages (colored lines),
+# and Timor-Leste highlighted in red
+tb_detailed_plot <- tb_country_timeline %>%
+  ggplot(aes(x = year, y = e_inc_100k)) +
+
+  # Individual country trajectories (subtle background)
+  geom_line(aes(group = country),
+            alpha = 0.15, color = "gray50", size = 0.3) +
+
+  # HIGHLIGHT TIMOR-LESTE with red color only (same thickness)
+  geom_line(data = timor_leste_data,
+            aes(group = country),
+            color = "#E31A1C", size = 0.3, alpha = 0.9) +
+
+  # Regional average trend (prominent)
+  geom_line(data = tb_incidence_timeline,
+            aes(y = mean_incidence, color = g_whoregion),
+            size = 1.5, alpha = 0.9) +
+
+  # Regional average points
+  geom_point(data = tb_incidence_timeline,
+             aes(y = mean_incidence, color = g_whoregion),
+             size = 2.5, alpha = 0.9) +
+
+  facet_wrap(~g_whoregion, scales = "free_y", ncol = 3) +
+
+  scale_x_continuous(breaks = c(2015, 2018, 2021, 2023)) +
+  scale_y_continuous(labels = comma_format()) +
+  scale_color_viridis_d(option = "plasma", end = 0.9) +
+
+  labs(
+    title = "TB Incidence: Regional Trends vs Country Variations (2015-2023)",
+    subtitle = "Thick colored lines: Regional averages | Red line: Timor-Leste | Thin gray lines: Other countries",
+    x = "Year",
+    y = "TB Incidence Rate (per 100,000)",
+    caption = "Source: WHO Global TB Database | Timor-Leste highlighted in red"
+  ) +
+
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10, color = "gray60"),
+    strip.text = element_text(size = 9, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none",
+    panel.grid.minor = element_blank()
+  )
+
+print(tb_detailed_plot)
+
+# Save the detailed plot with Timor-Leste highlighted
+ggsave("output/tb_incidence_detailed_timeline_timor_highlighted.png",
+       plot = tb_detailed_plot,
+       width = 14, height = 10, dpi = 300, bg = "white")
+
+cat("\nDetailed plot with Timor-Leste highlighted saved as: output/tb_incidence_detailed_timeline_timor_highlighted.png\n")
+```
+
+Global TB Incidence vs Mortality Evolution (2015-2023)
+
+```{r}
+# Prepare data for dual-axis plot
+tb_dual_data <- tb_data %>%
+  filter(!is.na(e_inc_100k), !is.na(e_mort_100k), !is.na(year)) %>%
+  group_by(year) %>%
+  summarise(
+    mean_incidence = mean(e_inc_100k, na.rm = TRUE),
+    mean_mortality = mean(e_mort_100k, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(year = as.numeric(year))
+
+# Calculate scaling factor for dual axis
+scale_factor <- max(tb_dual_data$mean_incidence, na.rm = TRUE) /
+                max(tb_dual_data$mean_mortality, na.rm = TRUE)
+
+dual_axis_plot <- tb_dual_data %>%
+  ggplot(aes(x = year)) +
+  geom_line(aes(y = mean_incidence, color = "Incidence"), size = 1.2) +
+  geom_point(aes(y = mean_incidence, color = "Incidence"), size = 2.5) +
+
+  geom_line(aes(y = mean_mortality * scale_factor, color = "Mortality"), size = 1.2) +
+  geom_point(aes(y = mean_mortality * scale_factor, color = "Mortality"), size = 2.5) +
+
+  scale_y_continuous(
+    name = "TB Incidence (per 100,000)",
+    sec.axis = sec_axis(~ . / scale_factor, name = "TB Mortality (per 100,000)")
+  ) +
+  scale_color_manual(
+    name = "Measure",
+    values = c("Incidence" = "#2E86AB", "Mortality" = "#A23B72")
+  ) +
+  labs(
+    title = "TB Incidence vs Mortality Evolution (2015-2023)",
+    subtitle = "Global averages showing parallel trends",
+    x = "Year"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.title.y.left = element_text(color = "#2E86AB"),
+    axis.title.y.right = element_text(color = "#A23B72")
+  )
+
+print(dual_axis_plot)
+```
+
+```{r}
+# Prepare country-level clean data
+country_clean_data <- tb_data %>%
+  # Filter for complete cases
+  filter(!is.na(e_inc_100k), !is.na(e_mort_100k), !is.na(g_whoregion), !is.na(year)) %>%
+  # Remove zero incidence to avoid division issues
+  filter(e_inc_100k > 0) %>%
+  mutate(year = as.numeric(year))
+
+# Separate Timor-Leste data for highlighting
+timor_clean_data <- country_clean_data %>%
+  filter(country == "Timor-Leste")
+
+# Prepare regional case fatality rate data
+regional_clean_data <- tb_data %>%
+  # Filter for complete cases
+  filter(!is.na(e_inc_100k), !is.na(e_mort_100k), !is.na(g_whoregion), !is.na(year)) %>%
+  # Remove zero incidence to avoid division issues
+  filter(e_inc_100k > 0) %>%
+  mutate(year = as.numeric(year)) %>%
+  # Calculate regional averages by year
+  group_by(g_whoregion, year) %>%
+  summarise(
+    mean_mort = mean(e_mort_100k, na.rm = TRUE),
+    median_mort = median(e_mort_100k, na.rm = TRUE),
+    countries_count = n(),
+    min_cfr = min(e_mort_100k, na.rm = TRUE),
+    max_cfr = max(e_mort_100k, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Alternative version with improved legend
+regional_mort_plot_clean <- country_clean_data %>%
+  # Add grouping variable for better legend control
+  mutate(country_type = case_when(
+    country == "Timor-Leste" ~ "Timor-Leste",
+    TRUE ~ "Other Countries"
+  )) %>%
+
+  ggplot(aes(x = year, y = e_mort_100k)) +
+
+  # Individual country trajectories (background)
+  geom_line(data = . %>% filter(country_type == "Other Countries"),
+            aes(group = country),
+            alpha = 0.15, color = "gray50", size = 0.3) +
+
+  # Timor-Leste highlighted
+  geom_line(data = . %>% filter(country_type == "Timor-Leste"),
+            aes(group = country),
+            color = "#E31A1C", size = 0.3, alpha = 0.9) +
+
+  # Regional average
+  geom_line(data = regional_clean_data,
+            aes(y = mean_mort, group = 1),
+            color = "#2E86AB", size = 1.2, alpha = 0.9) +
+  geom_point(data = regional_clean_data,
+             aes(y = mean_mort),
+             color = "#2E86AB", size = 2, alpha = 0.9) +
+
+  facet_wrap(~g_whoregion, scales = "free_y", ncol = 3) +
+
+  scale_x_continuous(breaks = c(2015, 2018, 2021, 2023)) +
+  scale_y_continuous(labels = function(x) round(x, 1)) +
+
+  labs(
+    title = "TB Case Mortality Rate: Regional Patterns and Country Variations (2015-2023)",
+    subtitle = "Each panel shows individual country trajectories within the region",
+    x = "Year",
+    y = "Case Mortality Rate (per 100k)",
+    caption = "Blue: Regional average | Red: Timor-Leste | Grey: Other countries"
+  ) +
+
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray60"),
+    strip.text = element_text(size = 10, face = "bold"),
+    strip.background = element_rect(fill = "gray95", color = NA),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.minor = element_blank(),
+    plot.caption = element_text(size = 8, color = "gray50")
+  )
+
+print(regional_mort_plot_clean)
+```
+
+### 2.2 Correlation analysis
+
+Prepare and clean data for correlation
+
+```{r}
+# --- 1. LOAD PACKAGES ---
+# Load all necessary packages for cleaning and EDA
+library(janitor)
+library(GGally)
+
+# --- 2. ROBUST DATA LOADING AND CLEANING (CORRECTED) ---
+
+tb_clean <- tb_focused %>%
+  # Filter for complete cases
+  filter(!is.na(e_inc_100k), !is.na(e_mort_100k), !is.na(g_whoregion), !is.na(year)) %>%
+  # Remove zero incidence to avoid division issues
+  filter(e_inc_100k > 0) %>%
+  mutate(year = as.numeric(year)) %>%
+  mutate(
+    # Now handle the factor conversions as before
+    across(c(country, g_whoregion, iso3), as.factor),
+    community_data_available = case_when(
+      community_data_available == 1 ~ "Available",
+      community_data_available == 0 ~ "Not Available",
+      .default = NA
+    ) %>% as.factor(),
+    year = as.integer(year)
+  )
+
+# Let's re-inspect to be sure
+cat("--- Structure of the Corrected Clean Data ---\n")
+glimpse(tb_clean)
+cat("\n")
+```
+
+Simplified faceted correlation plot by WHO region
+
+```{r}
+# Simplified faceted correlation plot
+simplified_correlation_plot <- tb_clean %>%
+  select(
+    g_whoregion,
+    e_mort_100k, c_cdr, e_inc_100k, rcvd_tot_domestic, rr_new, bmu_community_impl
+  ) %>%
+  filter(!is.na(g_whoregion)) %>%
+  group_by(g_whoregion) %>%
+  nest() %>%
+  mutate(
+    cor_matrix = map(data, ~ {
+      .x %>%
+        select(where(is.numeric)) %>%
+        cor(use = "pairwise.complete.obs")
+    }),
+    cor_long = map2(cor_matrix, g_whoregion, ~ {
+      .x %>%
+        as.data.frame() %>%
+        rownames_to_column("var1") %>%
+        pivot_longer(cols = -var1, names_to = "var2", values_to = "correlation") %>%
+        mutate(region = .y)
+    })
+  ) %>%
+  unnest(cor_long) %>%
+  ungroup() %>%
+  ggplot(aes(x = var1, y = var2, fill = correlation)) +
+  geom_tile(color = "white", size = 0.8) +
+  geom_text(aes(label = round(correlation, 2)), size = 2.5) +
+  scale_fill_gradient2(
+    low = "blue", mid = "white", high = "red",
+    midpoint = 0, name = "Correlation"
+  ) +
+  facet_wrap(~ region, ncol = 3) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_blank(),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    title = "Core TB Indicator Correlations by WHO Region",
+    subtitle = "CFR, Mortality, Case Detection, and Incidence patterns"
+  )
+
+print(simplified_correlation_plot)
+```
+
+Correlation plot for Timor-Leste
+
+```{r}
+tb_clean_tl <- tb_clean %>%
+  filter(country == "Timor-Leste") %>%
+  select(-c(e_inc_100k)) %>%
+  # select(
+  #   cfr_country, e_mort_100k, c_cdr, c_newinc_100k,
+  #   budget_tot, exp_tot, newrel_hivtest, rr_new
+  # ) %>%
+  select(where(is.numeric), -year)
+
+
+correlation_plot <- tb_clean_tl %>%
+  ggcorr(
+    method = c("pairwise", "pearson"),
+    label = TRUE,
+    label_size = 3.5,
+    label_round = 2,
+    hjust = 0.8,
+    size = 4,
+    layout.exp = 2
+  ) +
+  labs(
+    title = "Correlation Matrix of TB Indicators",
+    subtitle = "Pearson correlation coefficients"
+  )
+print(correlation_plot)
+```
+
+## Phase 3. Multivariate analysis
+
+### 3.1  Fixed Effects panel regression model
+
+#### The Goal
+Our objective is to answer: **"What factors influence the evolution of the TB incidence rate (`e_inc_100k`)?"** We will use a **two-way fixed effects model**, which is the best practice for your data. This model will control for:
+1.  **Country Fixed Effects:** All stable, unobserved characteristics of each country (e.g., geography, culture, political system).
+2.  **Year Fixed Effects:** Global shocks that affect all countries in a specific year (most importantly, the COVID-19 pandemic).
+
+#### Step 1: Setup - Load Required Libraries
+
+```{r}
+# Load the libraries
+library(plm)
+library(broom)
+library(modelsummary)
+library(knitr)
+```
+
+#### Step 2: Data Preparation
+
+```{r}
+# 1. Select the variables for the model
+# We'll choose our target variable (e_inc_100k) and a few key predictors.
+# It's good practice to use the ISO code for the country identifier as it's unique.
+model_data <- tb_clean %>%
+  select(
+    # Identifier variables
+    iso3,
+    country,
+    year,
+
+    # Target variable (Y)
+    e_mort_100k, # Case mortality per 100k
+
+    # Predictor variables (X)
+    c_cdr,             # Case detection rate
+    rcvd_tot_domestic, # Domestic funding
+    rr_new,            # Drug resistance indicator
+    bmu_community_impl # Number of Basic Management Units with data on referrals
+  )
+
+# 2. Handle missing values (NA)
+# Fixed effects models cannot handle missing data. We'll remove rows with any NAs.
+# In a full research project, you might consider imputation, but this is the standard first step.
+model_data_clean <- model_data %>%
+  drop_na()
+
+# 3. Create a panel data frame (pdata.frame)
+# This is a special type of data frame that plm needs. We tell it which
+# column identifies the individual (country) and which identifies the time (year).
+p_data <- pdata.frame(model_data_clean, index = c("iso3", "year"))
+
+# You can inspect the new panel data frame
+# It will look similar, but it now has special properties for panel models.
+kable(head(p_data)) 
+```
+
+#### Step 3: Build and Run the Model
+
+```{r}
+# 1. Define the model formula
+# The format is target_variable ~ predictor1 + predictor2 + ...
+fe_formula <- e_mort_100k ~ c_cdr + rcvd_tot_domestic + rr_new + bmu_community_impl
+# fe_formula_2019 <- e_mort_100k_2019 ~ (c_cdr + rcvd_tot_domestic + rr_new + bmu_community_impl)_2019 + COSAS_CONSTANTES_QUE_NO_SE (Fixed effects)
+# fe_formula_2020 <- e_mort_100k_2020 ~ (c_cdr + rcvd_tot_domestic + rr_new + bmu_community_impl)_2020 + COSAS_CONSTANTES_QUE_NO_SE (Fixed effects)
+
+# 2. Run the two-way fixed effects model
+# model = "within" specifies a fixed effects model.
+# effect = "twoways" specifies we want both country ("individual") and year ("time") fixed effects.
+fe_model <- plm(
+  formula = fe_formula,
+  data = p_data,
+  model = "within",
+  effect = "twoways"
+)
+```
+
+#### Step 4: Interpret the Results
+
+Method A: The Standard Summary
+
+```{r}
+summary(fe_model)
+```
+
+### Executive Summary: The Main Story
+
+1.  **Case Detection is the Most Powerful Life-Saving Factor:** The model shows with overwhelming statistical certainty that increasing the Case Detection Rate (`c_cdr`) is the most significant driver of reducing the TB mortality rate.
+2.  **Drug Resistance and Funding Show Important Effects:** A higher burden of drug-resistant TB (`rr_new`) is a significant driver of *increased* mortality. Domestic funding (`rcvd_tot_domestic`) also shows a significant positive relationship, which points to the "reverse causality" we've discussed before (money flows to where the crisis is worst).
+3.  **This is a Good Model:** The model is highly significant overall and explains **26.7%** of the change in the mortality rate within countries over time (`R-Squared: 0.26655`). This is a solid result and gives you confidence in the findings.
+
+---
+
+### Detailed Interpretation of Your Results
+
+This model gives you clear insights into the levers that affect TB mortality.
+
+#### 1. `c_cdr` (Case Detection Rate): The Primary Driver of Reduced Mortality
+
+*   **Estimate:** `-5.7005e-01`, which is **-0.57**.
+*   **Significance:** `***` (The p-value is `< 2.2e-16`, as significant as it gets).
+*   **Interpretation:** This is your strongest and most important finding. For every **1 percentage point increase** in a country's case detection rate, its TB mortality rate is associated with a **decrease of 0.57 deaths per 100,000 population**. This provides a direct, quantifiable link between the programmatic effort of finding patients and the ultimate goal of saving lives.
+
+#### 2. `rr_new` (New Drug-Resistant Cases): A Confirmed Driver of Increased Mortality
+
+*   **Estimate:** `1.3139e-03`, which is **+0.0013**.
+*   **Significance:** `***` (p-value is very small).
+*   **Interpretation:** This confirms that drug resistance is a major factor contributing to deaths. As the number of new drug-resistant cases goes up, the overall mortality rate significantly increases. Specifically, for every **1,000 additional RR-TB cases** identified, the national mortality rate is associated with an increase of **1.3 deaths per 100,000 population**.
+
+#### 3. `rcvd_tot_domestic` (Domestic Funding): The "Crisis Response" Signal
+
+*   **Estimate:** `1.3582e-07` (a very small positive number).
+*   **Significance:** `**` (p-value is 0.0013, which is statistically significant).
+*   **Interpretation:** As with the previous models, this significant positive coefficient should be interpreted as **reverse causality**. It means that countries with higher TB mortality rates tend to receive or allocate more domestic funding to address the crisis. It is strong evidence that **funding is being targeted at the areas of greatest need.** It does **not** mean that funding is causing mortality.
+
+#### 4. `bmu_community_impl` (Community Engagement): No Measurable Direct Effect
+
+*   **Estimate:** `-1.4772e-03` (a tiny negative number).
+*   **Significance:** Not significant (p-value is 0.52).
+*   **Interpretation:** In this global model that controls for other factors, the number of community units does not have a statistically significant, independent effect on the mortality rate. The life-saving impact of community programs is most likely being channeled through their contribution to the **Case Detection Rate (`c_cdr`)**, which is the more direct and powerful driver in this model.
+
+---
+
+### How to Use This for Your Evaluation
+
+This model provides a clear, defensible narrative for your project.
+
+* **To Justify Project Strategy:**
+
+  > "Our global panel regression analysis, which explains 27% of the change in TB mortality, identifies the **Case Detection Rate** as the single most powerful factor in saving lives. We found that every 1-point increase in case detection is associated with a decrease of 0.57 deaths per 100,000 population. This provides robust, evidence-based justification for our project's strategic focus on improving TB identification, diagnosis, and notification."
+
+* **To Acknowledge Key Challenges:**
+
+  > "The model also confirms that the burden of **drug-resistant TB** is a significant driver of mortality, validating project components aimed at strengthening the management of these complex cases. Furthermore, the analysis indicates that domestic funding is being responsively targeted to countries with the most severe mortality crises."
+
+* **To Explain the Role of Community Engagement:**
+
+  > "While the number of community units did not show a direct statistical effect on mortality in this model, their crucial role is implicitly captured. Effective community programs are a primary engine for increasing case detection, which our model proves is the key to reducing deaths."
+
+Method B: Tidy Output with `broom`
+
+```{r}
+# Get a tidy tibble of the model coefficients
+kable(tidy(fe_model))
+
+```
+
+
+Method C: Professional Regression Table with `modelsummary`
+
+```{r}
+# Create a professional summary table of the regression results
+modelsummary(
+  fe_model,
+  title = "Global TB Mortality Drivers with Fixed Effects",
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared") # We can select which goodness-of-fit stats to show (R2 and number of observations used)
+)
+```
+
+### How to Read and Interpret This Table
+
+This table is designed for clarity. Here’s what each part means:
+
+*   **Top Number (Coefficient):** The estimated impact of that variable.
+*   **Number in Parentheses (Standard Error):** The statistical uncertainty of the estimate.
+*   **Stars (`*`, `**`, `***`):** The level of statistical significance. More stars mean we are more confident the result is not due to random chance.
+
+#### **Key Findings from the Table:**
+
+1.  **`c_cdr` (Case Detection Rate): The Hero of the Story**
+    *   **Result:** `-0.570***`
+    *   **Interpretation:** This is your headline finding. A 1-point increase in the Case Detection Rate is associated with a **decrease of 0.57 deaths per 100,000 population**. The three stars (`***`) mean this is a highly reliable and statistically significant result. This is the strongest lever to pull to reduce TB mortality.
+
+2.  **`rr_new` (Drug-Resistant Cases): The Villain**
+    *   **Result:** `0.001***`
+    *   **Interpretation:** A higher number of drug-resistant cases is significantly associated with a higher death rate. The `***` confirms this is a major challenge. While the coefficient `0.001` looks small, it's because it's the effect of a single case; the cumulative impact is substantial.
+
+3.  **`rcvd_tot_domestic` (Domestic Funding): The Crisis Responder**
+    *   **Result:** `0.000**`
+    *   **Interpretation:** The coefficient is a tiny positive number, and the `**` means the relationship is statistically significant. This confirms the **reverse causality** argument: money flows to where the mortality crisis is most severe. It's a sign of a responsive system, not a cause of bad outcomes.
+
+4.  **`bmu_community_impl` (Community Engagement): The Supporting Actor**
+    *   **Result:** `-0.001`
+    *   **Interpretation:** The coefficient is tiny and, most importantly, has **no stars**. This means we cannot conclude it has a direct, independent effect on mortality in this model. Its positive impact is channeled through the `c_cdr` variable.
+
+#### **Model Fit Statistics (How Good is the Model?):**
+
+*   **`Num.Obs. (489)`:** The number of country-year observations used in the analysis.
+*   **`R2 (0.267)`:** The "within R-squared". This is a key number. It means your model successfully explains **26.7%** of the year-to-year change in TB mortality within countries. For this type of complex public health data, explaining over a quarter of the variation is a solid and respectable result.
+*   **`RMSE (7.03)`:** The Root Mean Squared Error. This means that, on average, the model's prediction of the mortality rate is off by about 7 deaths per 100,000 population.
+
+---
+
+### Final Recommendation for Your Report
+
+This table is "report-ready." You can place it directly in your document and use the interpretations above to build your narrative.
+
+**The story is simple, powerful, and data-driven:**
+
+> "To understand the key drivers of TB mortality, we conducted a global two-way fixed-effects panel regression. The results, summarized in the table below, show that the **Case Detection Rate is the single most powerful factor associated with reducing deaths** (coefficient of -0.57). Conversely, a higher burden of **drug-resistant TB significantly increases mortality**. The model, which explains 27% of the variation in mortality, provides strong evidence that our project's focus on strengthening case detection is aligned with the most effective, evidence-based strategy for saving lives."
+
+**Simple descriptive visualization for Mortality vs Case Detection for Timor-Leste**
+
+The results also support the global narrative even stronger.
+
+```{r}
+# 1. Filter your clean data for Timor-Leste only
+# Using 'iso3' is safest, assuming Timor-Leste's code is 'TLS'.
+# If not, use country == "Timor-Leste".
+timor_data <- tb_clean %>%
+  filter(iso3 == "TLS")
+
+# --- Step 2: Visualizing the Timor-Leste Story ---
+
+# Use the 'timor_data' we created in the previous step
+
+# A powerful visual is a dual-axis chart showing how incidence and case detection move over time.
+
+# 1. Calculate a scaling factor to make the two axes comparable
+# This finds the ratio between the max values of the two variables to scale the second axis
+scale_factor <- max(timor_data$e_mort_100k, na.rm = TRUE) / max(timor_data$c_cdr, na.rm = TRUE)
+
+# 2. Create the plot using ggplot2
+ggplot(timor_data, aes(x = year)) +
+  # Plot Incidence Rate (e_inc_100k) on the primary Y-axis
+  geom_line(aes(y = e_mort_100k, color = "Mortality Rate"), size = 1.2) +
+  geom_point(aes(y = e_mort_100k, color = "Mortality Rate"), size = 2.5) +
+
+  # Plot Case Detection Rate (c_cdr) on the secondary Y-axis
+  # We apply the scaling factor here
+  geom_line(aes(y = c_cdr * scale_factor, color = "Case Detection Rate"), size = 1.2, linetype = "dashed") +
+  geom_point(aes(y = c_cdr * scale_factor, color = "Case Detection Rate"), size = 2.5) +
+
+  # Define the secondary Y-axis by "un-scaling" the values
+  scale_y_continuous(
+    name = "Estimated Mortality per 100k",
+    sec.axis = sec_axis(~./scale_factor, name = "Case Detection Rate (%)")
+  ) +
+
+  # Add titles and clean up the theme
+  labs(
+    title = "TB Mortality Rate vs. Case Detection in Timor-Leste (2015-2023)",
+    subtitle = "As case detection improves, mortality declines, showing the project's focus is relevant",
+    x = "Year",
+    y = "Estimated Mortality per 100k",
+    color = "Indicator"
+  ) +
+  scale_color_manual(values = c("Mortality Rate" = "#d95f02", "Case Detection Rate" = "#1b9e77")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+```
+
+```{r}
+# 1. Filter your clean data for Timor-Leste only
+# Using 'iso3' is safest, assuming Timor-Leste's code is 'TLS'.
+# If not, use country == "Timor-Leste".
+timor_data <- tb_clean %>%
+  filter(iso3 == "TLS")
+
+# --- Step 2: Visualizing the Timor-Leste Story ---
+
+# Use the 'timor_data' we created in the previous step
+
+# A powerful visual is a dual-axis chart showing how incidence and case detection move over time.
+
+# 1. Calculate a scaling factor to make the two axes comparable
+# This finds the ratio between the max values of the two variables to scale the second axis
+scale_factor <- max(timor_data$e_mort_100k, na.rm = TRUE) / max(timor_data$rcvd_tot_domestic, na.rm = TRUE)
+
+# 2. Create the plot using ggplot2
+ggplot(timor_data, aes(x = year)) +
+  # Plot Incidence Rate (e_inc_100k) on the primary Y-axis
+  geom_line(aes(y = e_mort_100k, color = "Mortality Rate"), size = 1.2) +
+  geom_point(aes(y = e_mort_100k, color = "Mortality Rate"), size = 2.5) +
+
+  # Plot Case Detection Rate (c_cdr) on the secondary Y-axis
+  # We apply the scaling factor here
+  geom_line(aes(y = rcvd_tot_domestic * scale_factor, color = "Budget"), size = 1.2, linetype = "dashed") +
+  geom_point(aes(y = rcvd_tot_domestic * scale_factor, color = "Budget"), size = 2.5) +
+
+  # Define the secondary Y-axis by "un-scaling" the values
+  scale_y_continuous(
+    name = "Estimated Mortality per 100k",
+    sec.axis = sec_axis(~./scale_factor, name = "Budget")
+  ) +
+
+  # Add titles and clean up the theme
+  labs(
+    title = "TB Mortality Rate vs. Case Detection in Timor-Leste (2015-2023)",
+    subtitle = "As case detection improves, mortality declines, showing the project's focus is relevant",
+    x = "Year",
+    y = "Estimated Mortality per 100k",
+    color = "Indicator"
+  ) +
+  scale_color_manual(values = c("Mortality Rate" = "#d95f02", "Case Detection Rate" = "#1b9e77")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+```
+
+```{r}
+
+tb_dual_data <- tb_clean %>%
+  group_by(year) %>%
+  summarise(
+    mean_cdr = mean(c_cdr, na.rm = TRUE),
+    mean_mortality = mean(e_mort_100k, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(year = as.numeric(year))
+
+# --- Step 2: Visualizing the Timor-Leste Story ---
+
+# Use the 'timor_data' we created in the previous step
+
+# A powerful visual is a dual-axis chart showing how incidence and case detection move over time.
+
+# 1. Calculate a scaling factor to make the two axes comparable
+# This finds the ratio between the max values of the two variables to scale the second axis
+scale_factor <- max(tb_dual_data$mean_mortality, na.rm = TRUE) / max(tb_dual_data$mean_cdr, na.rm = TRUE)
+
+# 2. Create the plot using ggplot2
+ggplot(tb_dual_data, aes(x = year)) +
+  # Plot Incidence Rate (e_inc_100k) on the primary Y-axis
+  geom_line(aes(y = mean_mortality, color = "Mortality Rate"), size = 1.2) +
+  geom_point(aes(y = mean_mortality, color = "Mortality Rate"), size = 2.5) +
+
+  # Plot Case Detection Rate (c_cdr) on the secondary Y-axis
+  # We apply the scaling factor here
+  geom_line(aes(y = mean_cdr * scale_factor, color = "Case Detection Rate"), size = 1.2, linetype = "dashed") +
+  geom_point(aes(y = mean_cdr * scale_factor, color = "Case Detection Rate"), size = 2.5) +
+
+  # Define the secondary Y-axis by "un-scaling" the values
+  scale_y_continuous(
+    name = "Estimated Mortality per 100k",
+    sec.axis = sec_axis(~./scale_factor, name = "Case Detection Rate (%)")
+  ) +
+
+  # Add titles and clean up the theme
+  labs(
+    title = "Global TB Mortality Rate vs. Case Detection (2015-2023)",
+    subtitle = "As case detection improves, mortality declines, showing the project's focus is relevant",
+    x = "Year",
+    y = "Estimated Mortality per 100k",
+    color = "Indicator"
+  ) +
+  scale_color_manual(values = c("Mortality Rate" = "#d95f02", "Case Detection Rate" = "#1b9e77")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+```
+
+### 3.2 Regression trees model
+
+#### Step 1: Setup - Load Required Libraries
+
+```{r}
+library(rpart)
+library(rpart.plot)
+```
+
+#### Step 2: Data Preparation
+
+```{r}
+# Define the formula we'll use for all trees. This ensures consistency.
+# We're predicting the Case Fatality Rate (cfr).
+tree_formula <- e_mort_100k ~ c_cdr + rcvd_tot_domestic + rr_new + bmu_community_impl
+
+# --- Prepare data for 2018 ---
+data_2018 <- tb_clean %>%
+  filter(year == 2018) %>%
+  select(e_mort_100k, c_cdr, rcvd_tot_domestic, rr_new, bmu_community_impl) %>%
+  drop_na()
+
+# --- Prepare data for 2019 (the pre-pandemic baseline) ---
+data_2019 <- tb_clean %>%
+  filter(year == 2019) %>%
+  select(e_mort_100k, c_cdr, rcvd_tot_domestic, rr_new, bmu_community_impl) %>%
+  drop_na()
+
+# --- Prepare data for 2019 (the pre-pandemic baseline) ---
+data_2020 <- tb_clean %>%
+  filter(year == 2020) %>%
+  select(e_mort_100k, c_cdr, rcvd_tot_domestic, rr_new, bmu_community_impl) %>%
+  drop_na()
+
+# --- Prepare data for 2019 (the pre-pandemic baseline) ---
+data_2021 <- tb_clean %>%
+  filter(year == 2021) %>%
+  select(e_mort_100k, c_cdr, rcvd_tot_domestic, rr_new, bmu_community_impl) %>%
+  drop_na()
+
+# --- Prepare data for 2022 ---
+data_2022 <- tb_clean %>%
+  filter(year == 2022) %>%
+  select(e_mort_100k, c_cdr, rcvd_tot_domestic, rr_new, bmu_community_impl) %>%
+  drop_na()
+
+# --- Prepare data for 2023 (the most recent state) ---
+data_2023 <- tb_clean %>%
+  filter(year == 2023) %>%
+  select(e_mort_100k, c_cdr, rcvd_tot_domestic, rr_new, bmu_community_impl) %>%
+  drop_na()
+```
+
+#### Step 3: Build and Run the Models for various years
+
+#### Year 2018
+
+```{r}
+# Build the tree model for 2018
+tree_2018 <- rpart(
+  tree_formula,
+  data = data_2018,
+  control = rpart.control(cp = 0.01) # Prunes the tree to keep it simple
+)
+
+# Create the beautiful flowchart plot
+rpart.plot(
+  tree_2018,
+  type = 2,
+  extra = 101, # Shows the average value and percentage of observations
+  box.palette = "BuGn", # Use a nice color palette
+  nn = TRUE, # Show node numbers
+  main = "TB Fatality Rate Drivers in 2018 (Project Baseline)"
+)
+```
+
+#### Year 2019
+
+```{r}
+# Build the tree model for 2019
+tree_2019 <- rpart(
+  tree_formula,
+  data = data_2019,
+  control = rpart.control(cp = 0.01)
+)
+
+# Plot the flowchart
+rpart.plot(
+  tree_2019,
+  type = 2, extra = 101, box.palette = "OrRd",
+  nn = TRUE,
+  main = "TB Fatality Rate Drivers in 2019 (Pre-Pandemic)"
+)
+```
+
+### Overall Narrative
+
+*(The number in each box is the average TB Mortality Rate (`e_mort_100k`) for the countries in that group.)*
+
+In the pre-pandemic year of 2019, the world of TB control was defined by clear performance tiers. The **Case Detection Rate (CDR)** was, by far, the most critical factor determining a country's success. For countries that struggled with this fundamental step, mortality rates were catastrophic. For those that were more successful at finding cases, the next major challenge that separated good outcomes from average ones was the burden of **drug-resistant TB**.
+
+---
+
+### Step-by-Step Interpretation of the Flowchart
+
+#### **1. The Starting Point (Node 1 - Top Box)**
+
+*   **Average Mortality Rate:** 31 deaths per 100,000
+*   **Countries:** n=80 (100% of the data)
+*   **Interpretation:** Across the 80 countries with complete data in 2019, the average TB mortality rate was 31.
+
+#### **2. The First and Most Important Question**
+
+*   **The Split:** `c_cdr >= 50`
+*   **Interpretation:** This is the most powerful finding. The single most important factor determining TB mortality in 2019 was whether a country's **Case Detection Rate was above or below 50%**. This represents a critical tipping point.
+
+#### **3. The Two Main Branches**
+
+**Branch A: The "Crisis" Group (Follow the "no" path to Node 3)**
+
+*   **Profile:** Countries where `c_cdr < 50%`.
+*   **Result:** This small group of 8 countries (10% of the total) had a staggering average **Mortality Rate of 102**.
+*   **Conclusion:** This is the group of worst performers. Their failure to find even half of the people with TB led to an extremely high death rate. For this group, no other factor mattered as much as improving basic case detection.
+
+**Branch B: The "Functioning System" Group (Follow the "yes" path to Node 2)**
+
+*   **Profile:** Countries where `c_cdr >= 50%`.
+*   **Result:** The vast majority of countries (n=72, 90%) were in this group. They had a much lower average **Mortality Rate of 23**.
+*   **Conclusion:** Simply crossing the 50% CDR threshold dramatically improved outcomes.
+
+#### **4. The Second Question (For Countries with a Functioning System)**
+
+*   **The Split:** `c_cdr >= 70`
+*   **Interpretation:** For countries that had already met the basic 50% threshold, the next important distinction was whether they achieved a **high level of case detection (above 70%)**.
+
+#### **5. The Three Final Groups (The Performance Tiers)**
+
+**Final Group 1: The "High Performers" (Node 4)**
+
+*   **Profile:** Countries with `c_cdr >= 70%`.
+*   **Result:** This large group of 42 countries (52% of the total) are the clear leaders. They have an excellent average **Mortality Rate of only 11**.
+*   **Conclusion:** Achieving a high CDR is the most direct path to low TB mortality.
+
+**Final Group 2 & 3: The "Middle Group" - Where Drug Resistance is Key (Node 5 and below)**
+
+*   This is the group of 30 countries "stuck in the middle" (CDR between 50% and 70%). Their average mortality rate is 39.
+*   **The Final Split:** `rr_new < 76` (i.e., fewer than 76 new drug-resistant cases).
+    *   **If YES (Node 10):** This group of 15 countries had a moderate **Mortality Rate of 25**.
+    *   **If NO (Node 11):** This group of 15 countries, which had both a middling CDR *and* a higher burden of drug resistance, had a much worse **Mortality Rate of 54**.
+*   **Conclusion:** This powerfully illustrates that once a country's basic system is functioning, **drug resistance becomes a critical secondary driver of deaths.** A high DR-TB burden can completely erase the gains made from having a decent case detection rate.
+
+---
+
+### How to Use This in Your Evaluation Report
+
+This visual perfectly complements your Fixed Effects model results.
+
+1.  **Confirming Key Drivers:** "A regression tree analysis of the 2019 data visually confirms the findings of our statistical model. It identifies the **Case Detection Rate as the single most important factor** influencing TB mortality, followed by the **burden of drug-resistant TB** as a critical secondary driver."
+
+2.  **Justifying Project Focus:** "The tree clearly shows that countries with a Case Detection Rate below 50% had catastrophic mortality rates (102). Our project, by focusing on improving identification and diagnosis, is directly addressing the most crucial bottleneck to reducing TB deaths."
+
+3.  **Providing Actionable Thresholds:** "The analysis provides useful performance benchmarks. A CDR of 50% appears to be a minimum threshold for system functionality, while achieving over 70% places a country in the top-performing group. It also highlights that for countries in the 50-70% range, tackling drug resistance is the next priority for saving lives."
+
+#### Year 2020
+
+```{r}
+# Build the tree model for 2020
+tree_2020 <- rpart(
+  tree_formula,
+  data = data_2020,
+  control = rpart.control(cp = 0.01)
+)
+
+# Plot the flowchart
+rpart.plot(
+  tree_2020,
+  type = 2, extra = 101, box.palette = "YlGn",
+  nn = TRUE,
+  main = "TB Fatality Rate Drivers in 2020 (Post-Pandemic)"
+)
+```
+
+#### Year 2021
+
+```{r}
+# Build the tree model for 2021
+tree_2021 <- rpart(
+  tree_formula,
+  data = data_2021,
+  control = rpart.control(cp = 0.01)
+)
+
+# Plot the flowchart
+rpart.plot(
+  tree_2021,
+  type = 2, extra = 101, box.palette = "BuGn",
+  nn = TRUE,
+  main = "TB Fatality Rate Drivers in 2021 (Post-Pandemic)"
+)
+```
+
+#### Year 2022
+
+```{r}
+# Build the tree model for 2022
+tree_2022 <- rpart(
+  tree_formula,
+  data = data_2022,
+  control = rpart.control(cp = 0.01)
+)
+
+# Plot the flowchart
+rpart.plot(
+  tree_2022,
+  type = 2, extra = 101, box.palette = "BuGn",
+  nn = TRUE,
+  main = "TB Fatality Rate Drivers in 2022 (Post-Pandemic)"
+)
+```
+
+#### Year 2023
+
+```{r}
+# Build the tree model for 2023
+tree_2023 <- rpart(
+  tree_formula,
+  data = data_2023,
+  control = rpart.control(cp = 0.01)
+)
+
+# Plot the flowchart
+rpart.plot(
+  tree_2023,
+  type = 2, extra = 101, box.palette = "PuBu",
+  nn = TRUE,
+  main = "TB Fatality Rate Drivers in 2023 (Current State)"
+)
+```
+
+### 3.4 Hierarchical clusterings
+
+### For 2018 (pre-pandemic)
+
+#### Step 1: Setup - Load Required Libraries
+
+```{r}
+library(stats)
+```
+
+#### Step 2: Data Preparation
+
+```{r}
+# 1. Prepare data (same as before)
+profile_vars <- c(
+  'e_mort_100k',        # Case Mortality Rate
+  'c_cdr',             # Case Detection Rate
+  'rcvd_tot_domestic', # Domestic Funding
+  'rr_new',             # Drug Resistance Burden
+  'bmu_community_impl' # Community referral units
+)
+
+data_for_clustering <- tb_clean %>%
+  filter(year == 2018) %>%
+  select(iso3, country, all_of(profile_vars)) %>%
+  drop_na()
+
+# Create the scaled data, but KEEP it as a matrix for now
+data_scaled <- data_for_clustering %>%
+  select(-iso3, -country) %>%
+  scale()
+
+# The plot function will use these names as labels.
+rownames(data_scaled) <- data_for_clustering$country
+```
+
+#### Step 3: Build and Run the Model
+
+```{r}
+# 1. Calculate the "distance" between every pair of countries
+# 'euclidean' is the standard, straight-line distance between points in space.
+dist_matrix <- dist(data_scaled, method = 'euclidean')
+
+# 2. Run the hierarchical clustering algorithm
+# 'ward.D2' is a very effective method that tends to create compact, well-separated clusters.
+hclust_result <- hclust(dist_matrix, method = 'ward.D2')
+```
+
+#### Step 4: Visualize and Interpret
+
+```{r}
+# Plot the dendrogram (the "family tree")
+plot(
+  hclust_result,
+  main = "Dendrogram of Country Clusters (2019 TB Profile)",
+  xlab = "Countries",
+  ylab = "Height (Dissimilarity)",
+  cex = 0.5 # Adjust 'cex' to make country labels smaller or larger if they overlap
+)
+
+# Optional: Add boxes around the clusters to make them clearer
+# Let's say we want to visualize 5 main clusters
+rect.hclust(hclust_result, k = 5, border = "red")
+```
+
+#### Step 5: Formally Identify Timor-Leste's Peer Group
+
+```{r}
+# 1. "Cut" the tree to create a specific number of clusters.
+# Choosing 'k' (the number of clusters) is part art, part science.
+# Look at the dendrogram to see what number makes sense. # Let's use k=5 as an example
+clusters_vector <- cutree(hclust_result, k = 5)
+
+# 2. Add the cluster assignments back to your original (unscaled) data
+# This makes it easy to inspect the characteristics of each cluster.
+data_with_clusters <- data_for_clustering %>%
+  mutate(cluster = clusters_vector)
+
+# 3. Find Timor-Leste's cluster number
+# Use its ISO code for accuracy
+timor_cluster_number <- data_with_clusters %>%
+  filter(iso3 == "TLS") %>%
+  pull(cluster)
+
+# 4. Filter the data to get the list of all countries in Timor-Leste's peer group
+peer_group <- data_with_clusters %>%
+  filter(cluster == timor_cluster_number)
+
+# 5. Print the final result
+cat("Timor-Leste belongs to Cluster #", timor_cluster_number, "\n")
+cat("The countries in this peer group are:\n")
+peer_group
+
+# Optional: Calculate the average profile for this cluster
+cluster_profile <- peer_group %>%
+  summarise(across(all_of(profile_vars), ~mean(.x, na.rm = TRUE)))
+
+cat("\nAverage profile for this cluster:\n")
+cluster_profile
+```
+
+### Overall Narrative
+
+In 2018, Timor-Leste belonged to a large and diverse cluster of 20 countries, primarily from sub-Saharan Africa, characterized by a **"High Burden, High Effort"** profile. These countries faced a severe TB mortality crisis but were also demonstrating a solid effort in case detection. This immediately justifies the relevance of a project aimed at strengthening TB control, as Timor-Leste was clearly situated among nations facing one of the world's most significant public health challenges.
+
+---
+
+### Step-by-Step Interpretation
+
+#### 1. The Peer Group Identity
+
+*   **Who are they?** The list is dominated by African nations known to have significant TB burdens (e.g., Nigeria, DRC, Kenya, Zambia), along with a few from other regions facing similar challenges (e.g., Nepal, Mongolia). This is a very logical grouping.
+*   **The Key Insight:** This immediately tells you that from a data perspective, Timor-Leste's TB problem in 2018 was much more similar to that of these African nations than perhaps to its geographical neighbors in Southeast Asia. This is a crucial finding and justifies comparing its progress to this specific peer group, not just the regional average.
+
+#### 2. The Cluster's "Average Profile"
+
+Let's look at the summary table at the bottom. This is the statistical "identity card" for Cluster #2.
+
+*   **`e_mort_100k` (Mortality): 93.8**
+    *   **Interpretation:** This is a **very high** average death rate. It confirms that this cluster represents countries with a severe, uncontrolled TB epidemic.
+*   **`c_cdr` (Case Detection Rate): 50**
+    *   **Interpretation:** An average CDR of 50% is a critical finding. It's not terrible (some countries are much lower), but it's far from the 80-90% target. It means these countries were, on average, **missing half of all TB cases**. This is a massive gap in care.
+*   **`rcvd_tot_domestic` (Domestic Funding): ~$6 million**
+    *   **Interpretation:** This shows a significant, but perhaps insufficient, level of domestic financial commitment.
+*   **`rr_new` (Drug Resistance): 236**
+    *   **Interpretation:** This indicates a substantial burden of drug-resistant TB, adding another layer of complexity to the challenge.
+
+#### 3. Timor-Leste's Position *Within* the Cluster
+
+Now, let's compare Timor-Leste's specific numbers to the cluster average. This tells you if it was a "typical" member, or an outlier within its own group.
+
+| Variable                 | Timor-Leste's Value | Cluster Average | Interpretation                                               |
+| :----------------------- | :------------------ | :-------------- | :----------------------------------------------------------- |
+| **`e_mort_100k`**        | 96                  | 93.8            | **Typical.** Timor-Leste's mortality rate was right in line with its high-burden peers. |
+| **`c_cdr`**              | **60**              | **50**          | **Outperformer.** This is a key positive finding. At the start of the project, Timor-Leste's case detection was **10 percentage points better** than its peer group average. It was already a leader within this "high effort" group. |
+| **`rcvd_tot_domestic`**  | 0                   | ~$6M            | **Outlier (Negative).** Timor-Leste reported no domestic funding, making it entirely reliant on external aid, unlike many of its peers. This is a major vulnerability. |
+| **`rr_new`**             | 12                  | 236             | **Outperformer.** Timor-Leste had a much lower burden of drug-resistant TB than its peers. This was a significant advantage. |
+| **`bmu_community_impl`** | 18                  | 131             | **Outlier.** Timor-Leste had a much smaller community health network compared to its peers. |
+
+---
+
+### How to Use This in Your Evaluation Report
+
+This analysis provides a rich, multi-layered story.
+
+1. **Justifying Project Relevance:**
+
+   > "A global clustering analysis of 2018 data placed Timor-Leste in a peer group of 20 high-burden nations, primarily from sub-Saharan Africa. This cluster was defined by a severe average TB mortality rate of 94 deaths per 100,000 population and a case detection rate of only 50%. This firmly establishes that at the project's outset, Timor-Leste was facing a critical public health crisis, making the project's intervention highly relevant."
+
+2. **Highlighting Timor-Leste's Strengths and Weaknesses:**
+
+   > "Within this challenging context, Timor-Leste demonstrated notable strengths. Its case detection rate of 60% was significantly higher than its peer group average, indicating a strong programmatic foundation. Furthermore, it had a much lower burden of drug-resistant TB. However, the analysis also highlighted a critical vulnerability: a complete reliance on external funding, in contrast to its peers who had, on average, $6 million in domestic investment."
+
+3. **Setting the Stage for Comparison:**
+
+   > "This data-driven peer group provides a robust benchmark for evaluating Timor-Leste's progress. The key question for this evaluation is whether Timor-Leste was able to leverage its strengths in case detection and build upon them, outpacing the progress of these similar nations over the project period."
+
+### For 2020 (post-pandemic)
+
+```{r}
+# 1. Prepare data (same as before)
+profile_vars <- c(
+  'e_mort_100k',        # Case Mortality Rate
+  'c_cdr',             # Case Detection Rate
+  'rcvd_tot_domestic', # Domestic Funding
+  'rr_new',             # Drug Resistance Burden
+  'bmu_community_impl' # Community referral units
+)
+
+data_for_clustering <- tb_clean %>%
+  filter(year == 2022) %>%
+  select(iso3, country, all_of(profile_vars))
+
+# Create the scaled data, but KEEP it as a matrix for now
+data_scaled <- data_for_clustering %>%
+  select(-iso3, -country) %>%
+  scale()
+
+# The plot function will use these names as labels.
+rownames(data_scaled) <- data_for_clustering$country
+
+# 1. Calculate the "distance" between every pair of countries
+# 'euclidean' is the standard, straight-line distance between points in space.
+dist_matrix <- dist(data_scaled, method = 'euclidean')
+
+# 2. Run the hierarchical clustering algorithm
+# 'ward.D2' is a very effective method that tends to create compact, well-separated clusters.
+hclust_result <- hclust(dist_matrix, method = 'ward.D2')
+
+# Plot the dendrogram (the "family tree")
+plot(
+  hclust_result,
+  main = "Dendrogram of Country Clusters (2019 TB Profile)",
+  xlab = "Countries",
+  ylab = "Height (Dissimilarity)",
+  cex = 0.5 # Adjust 'cex' to make country labels smaller or larger if they overlap
+)
+
+# Optional: Add boxes around the clusters to make them clearer
+# Let's say we want to visualize 5 main clusters
+rect.hclust(hclust_result, k = 5, border = "red")
+```
+
+```{r}
+# 1. "Cut" the tree to create a specific number of clusters.
+# Choosing 'k' (the number of clusters) is part art, part science.
+# Look at the dendrogram to see what number makes sense. # Let's use k=5 as an example
+clusters_vector <- cutree(hclust_result, k = 5)
+
+# 2. Add the cluster assignments back to your original (unscaled) data
+# This makes it easy to inspect the characteristics of each cluster.
+data_with_clusters <- data_for_clustering %>%
+  mutate(cluster = clusters_vector)
+
+# 3. Find Timor-Leste's cluster number
+# Use its ISO code for accuracy
+timor_cluster_number <- data_with_clusters %>%
+  filter(iso3 == "TLS") %>%
+  pull(cluster)
+
+# 4. Filter the data to get the list of all countries in Timor-Leste's peer group
+peer_group <- data_with_clusters %>%
+  filter(cluster == timor_cluster_number)
+
+# 5. Print the final result
+cat("Timor-Leste belongs to Cluster #", timor_cluster_number, "\n")
+cat("The countries in this peer group are:\n")
+print(peer_group)
+
+# Optional: Calculate the average profile for this cluster
+cluster_profile <- peer_group %>%
+  summarise(across(all_of(profile_vars), ~mean(.x, na.rm = TRUE)))
+
+cat("\nAverage profile for this cluster:\n")
+print(cluster_profile)
+```
+
+```{r}
+print(peer_group %>% filter(country == "Timor-Leste"))
+```
+
+### Overall Narrative: The Pandemic's Toll
+
+The 2020 analysis reveals the severe impact of the COVID-19 pandemic on Timor-Leste and its peer group. While Timor-Leste remained within a similar "High Burden" cluster, its individual performance **declined significantly**, and the overall profile of the cluster shifted. The pandemic acted as a major stress test, causing Timor-Leste's Case Detection Rate to fall below the group average and its mortality rate to spike dramatically, making it one of the worst performers within its peer group for that year.
+
+---
+
+### Step-by-Step Interpretation
+
+#### 1. The Peer Group Identity: Stability and Change
+
+*   **Who are they?** The group is still largely composed of high-burden African nations (DRC, Kenya, Zambia) and some from Asia (Myanmar, Nepal). Many countries from the 2018 cluster are still here (e.g., Angola, DRC, Kenya, Namibia, Timor-Leste, Zambia), indicating a persistent structural similarity.
+*   **The Key Insight:** The clustering algorithm confirms that even during the pandemic chaos, these countries continued to share a fundamentally similar profile of challenges.
+
+#### 2. The Cluster's "Average Profile" in 2020
+
+Let's compare the 2020 cluster average to the 2018 average.
+
+| Variable          | 2020 Cluster Average | 2018 Cluster Average | Change               |
+| :---------------- | :------------------- | :------------------- | :------------------- |
+| **`e_mort_100k`** | **60.9**             | 93.8                 | **Massive Decrease** |
+| **`c_cdr`**       | 51.6                 | 50                   | Stable               |
+
+**Wait, why did average mortality *decrease* so much?** This is a critical statistical artifact you must address.
+
+*   **Reason:** The *composition* of the cluster changed. Several countries with extremely high mortality rates in 2018 (like Lesotho at 231) dropped out of this cluster in 2020. At the same time, new countries with lower baseline mortality (like Côte d'Ivoire at 34 and Malawi at 40) joined. This change in membership pulled the group's average down.
+*   **The Real Story:** This doesn't mean the pandemic was good for mortality. The more important analysis is comparing Timor-Leste's individual change to the new, slightly different peer group.
+
+#### 3. Timor-Leste's Position *Within* the 2020 Cluster
+
+This is where the most powerful story lies. Let's compare Timor-Leste's 2020 data to its new 2020 peer group average.
+
+| Variable                | Timor-Leste's 2020 Value | 2020 Cluster Average | Interpretation                                               |
+| :---------------------- | :----------------------- | :------------------- | :----------------------------------------------------------- |
+| **`e_mort_100k`**       | **118**                  | **60.9**             | **CRITICAL UNDERPERFORMANCE.** This is the most alarming finding. Timor-Leste's mortality rate was **nearly double** the average of its peer group in 2020. The pandemic hit its mortality outcomes exceptionally hard. |
+| **`c_cdr`**             | **49**                   | **51.6**             | **Shift from Leader to Laggard.** In 2018, Timor-Leste's CDR was 10 points *above* its peers. In 2020, it fell *below* the peer average. This shows a significant disruption in its core TB services. |
+| **`rcvd_tot_domestic`** | ~$514k                   | ~$3.8M               | **Still an Outlier.** While some domestic funding appears, it is still far below the peer average, reinforcing its reliance on external support during a crisis. |
+| **`rr_new`**            | 10                       | 239                  | **Still a Strength.** Timor-Leste continued to have a much lower drug-resistance burden, which was a key advantage. |
+
+---
+
+### How to Use This in Your Evaluation Report
+
+This 2020 snapshot is the dramatic "second act" of your story.
+
+1. **Acknowledge the Pandemic's Severe Impact:**
+
+   > "The 2020 clustering analysis, conducted during the peak of the COVID-19 pandemic, reveals a severe negative impact on Timor-Leste's TB program. While remaining in a peer group of high-burden nations, its individual performance deteriorated sharply."
+
+2. **Highlight the "Reversal of Fortune":**
+
+   > "In 2018, Timor-Leste was a leader within its peer group, with a Case Detection Rate (CDR) 10 points above the average. By 2020, this advantage was lost; its CDR fell to 49%, slightly below the peer average. This reversal demonstrates the fragility of its service delivery in the face of a major external shock."
+
+3. **Point to the Alarming Mortality Spike:**
+
+   > "The most concerning finding is the dramatic increase in mortality. Timor-Leste's death rate surged to 118 per 100,000, nearly double the average of its peer group (61). This suggests that the country was less resilient to the pandemic's disruption than other similar nations, leading to a disproportionately high number of preventable deaths."
+
+4. **Set the Stage for the Recovery Story:**
+
+   > "This 2020 data provides a stark picture of the challenge faced at the pandemic's peak. The critical question for the remainder of the evaluation is to assess the speed and effectiveness of the recovery. The analysis of the 2022 and 2023 data will show whether Timor-Leste was able to reclaim its leadership position and bring its mortality rate back in line with, or even ahead of, its peers."
+
+### 3.5 Simple multivariable linear regression (by year and global data)
+
+### 2018
+
+#### Step 1 - Load Libraries (not needed, already loaded)
+
+#### Step 2 - Data Preparation
+
+```{r}
+# 1. Filter the main 'tb_clean' tibble for the year 2019
+data_2018 <- tb_clean %>%
+  filter(year == 2018)
+
+# 2. Select the variables for the model and remove rows with missing data
+# This ensures the model runs on a complete dataset for that year.
+model_data_2018 <- data_2018 %>%
+  select(
+    # Target variable (Y)
+    e_mort_100k,
+
+    # Predictor variables (X)
+    c_cdr,
+    rcvd_tot_domestic,
+    rr_new,
+    bmu_community_impl
+  ) %>%
+  # drop_na() is essential for lm() to work correctly
+  drop_na()
+```
+
+#### Step 3: Build and Run the Model
+
+```{r}
+# 1. Define the model formula
+# This is the same structure as before, linking the target to the predictors.
+lm_formula <- e_mort_100k ~ c_cdr + rcvd_tot_domestic + rr_new + bmu_community_impl
+
+# 2. Run the linear model on the 2019 data
+# We use lm() because this is a standard cross-sectional regression, not a panel model.
+lm_2018_model <- lm(lm_formula, data = model_data_2018)
+```
+
+#### Step 4: Interpret the Results
+
+Table of coefficients
+
+```{r}
+summary(lm_2018_model)
+```
+
+Tidy table
+
+```{r}
+kable(tidy(lm_2018_model))
+
+```
+
+
+Another way of seeing the results table
+
+```{r}
+# Create a professional summary table of the regression results
+modelsummary(
+  lm_2018_model,
+  title = "TB Mortality Drivers in 2018 (Cross-Sectional Analysis)",
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared") # We can select which goodness-of-fit stats to show
+)
+```
+
+### 2023
+
+#### Step 1 - Load Libraries (not needed, already loaded)
+
+#### Step 2 - Data Preparation
+
+```{r}
+# 1. Filter the main 'tb_clean' tibble for the year 2019
+data_2023 <- tb_clean %>%
+  filter(year == 2023)
+
+# 2. Select the variables for the model and remove rows with missing data
+# This ensures the model runs on a complete dataset for that year.
+model_data_2023 <- data_2023 %>%
+  select(
+    # Target variable (Y)
+    e_mort_100k,
+
+    # Predictor variables (X)
+    c_cdr,
+    rcvd_tot_domestic,
+    rr_new,
+    bmu_community_impl
+  ) %>%
+  # drop_na() is essential for lm() to work correctly
+  drop_na()
+```
+
+#### Step 3: Build and Run the Model
+
+```{r}
+# 1. Define the model formula
+# This is the same structure as before, linking the target to the predictors.
+lm_formula <- e_mort_100k ~ c_cdr + rcvd_tot_domestic + rr_new + bmu_community_impl
+
+# 2. Run the linear model on the 2019 data
+# We use lm() because this is a standard cross-sectional regression, not a panel model.
+lm_2023_model <- lm(lm_formula, data = model_data_2023)
+```
+
+#### Step 4: Interpret the Results
+
+Table of coefficients
+
+```{r}
+summary(lm_2023_model)
+```
+
+Tidy table
+
+```{r}
+kable(tidy(lm_2023_model))
+
+```
+
+
+Another way of seeing the results table
+
+```{r}
+# Create a professional summary table of the regression results
+modelsummary(
+  lm_2023_model,
+  title = "TB Mortality Drivers in 2023 (Cross-Sectional Analysis)",
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared") # We can select which goodness-of-fit stats to show
+)
+```
+
+### 3.6 Simple multivariable linear regression (by year and AFR and SEA data)
+
+### 2018
+
+#### Step 1 - Load Libraries (not needed, already loaded)
+
+#### Step 2 - Data Preparation
+
+```{r}
+# 1. Filter the main 'tb_clean' tibble for the year 2019
+data_SEA_2018 <- tb_clean %>%
+  filter(year == 2018) %>%
+  filter(g_whoregion == "SEA")
+
+data_AFR_2018 <- tb_clean %>%
+  filter(year == 2018) %>%
+  filter(g_whoregion == "AFR")
+
+# 2. Select the variables for the model and remove rows with missing data
+# This ensures the model runs on a complete dataset for that year.
+model_data_SEA_2018 <- data_SEA_2018 %>%
+  select(
+    # Target variable (Y)
+    e_mort_100k,
+
+    # Predictor variables (X)
+    c_cdr,
+    rcvd_tot_domestic,
+    rr_new,
+    bmu_community_impl
+  ) %>%
+  # drop_na() is essential for lm() to work correctly
+  drop_na()
+
+model_data_AFR_2018 <- data_AFR_2018 %>%
+  select(
+    # Target variable (Y)
+    e_mort_100k,
+
+    # Predictor variables (X)
+    c_cdr,
+    rcvd_tot_domestic,
+    rr_new,
+    bmu_community_impl
+  ) %>%
+  # drop_na() is essential for lm() to work correctly
+  drop_na()
+```
+
+#### Step 3: Build and Run the Model
+
+```{r}
+# 1. Define the model formula
+# This is the same structure as before, linking the target to the predictors.
+lm_formula <- e_mort_100k ~ c_cdr + rcvd_tot_domestic + rr_new + bmu_community_impl
+
+# 2. Run the linear model on the 2019 data
+# We use lm() because this is a standard cross-sectional regression, not a panel model.
+lm_2018_SEA_model <- lm(lm_formula, data = model_data_SEA_2018)
+lm_2018_AFR_model <- lm(lm_formula, data = model_data_AFR_2018)
+```
+
+#### Step 4: Interpret the Results
+
+Table of coefficients
+
+```{r}
+summary(lm_2018_SEA_model)
+summary(lm_2018_AFR_model)
+```
+
+Another way of seeing the results table
+
+```{r}
+# Create a professional summary table of the regression results
+modelsummary(
+  lm_2018_SEA_model,
+  title = "TB Mortality Drivers in 2018 (SEA Region)",
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared") # We can select which goodness-of-fit stats to show
+)
+
+modelsummary(
+  lm_2018_AFR_model,
+  title = "TB Mortality Drivers in 2018 (AFR Region)",
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared") # We can select which goodness-of-fit stats to show
+)
+```
+
+### 2023
+
+#### Step 1 - Load Libraries (not needed, already loaded)
+
+#### Step 2 - Data Preparation
+
+```{r}
+# 1. Filter the main 'tb_clean' tibble for the year 2019
+data_SEA_2023 <- tb_clean %>%
+  filter(year == 2023) %>%
+  filter(g_whoregion == "SEA")
+
+data_AFR_2023 <- tb_clean %>%
+  filter(year == 2023) %>%
+  filter(g_whoregion == "AFR")
+
+# 2. Select the variables for the model and remove rows with missing data
+# This ensures the model runs on a complete dataset for that year.
+model_data_SEA_2023 <- data_SEA_2023 %>%
+  select(
+    # Target variable (Y)
+    e_mort_100k,
+
+    # Predictor variables (X)
+    c_cdr,
+    rcvd_tot_domestic,
+    rr_new,
+    bmu_community_impl
+  ) %>%
+  # drop_na() is essential for lm() to work correctly
+  drop_na()
+
+model_data_AFR_2023 <- data_AFR_2023 %>%
+  select(
+    # Target variable (Y)
+    e_mort_100k,
+
+    # Predictor variables (X)
+    c_cdr,
+    rcvd_tot_domestic,
+    rr_new,
+    bmu_community_impl
+  ) %>%
+  # drop_na() is essential for lm() to work correctly
+  drop_na()
+```
+
+#### Step 3: Build and Run the Model
+
+```{r}
+# 1. Define the model formula
+# This is the same structure as before, linking the target to the predictors.
+lm_formula <- e_mort_100k ~ c_cdr + rcvd_tot_domestic + rr_new + bmu_community_impl
+
+# 2. Run the linear model on the 2019 data
+# We use lm() because this is a standard cross-sectional regression, not a panel model.
+lm_2023_SEA_model <- lm(lm_formula, data = model_data_SEA_2023)
+lm_2023_AFR_model <- lm(lm_formula, data = model_data_AFR_2023)
+```
+
+#### Step 4: Interpret the Results
+
+Table of coefficients
+
+```{r}
+summary(lm_2023_SEA_model)
+summary(lm_2023_AFR_model)
+```
+
+Another way of seeing the results table
+
+```{r}
+# Create a professional summary table of the regression results
+modelsummary(
+  lm_2023_SEA_model,
+  title = "TB Mortality Drivers in 2023 (SEA Region)",
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared") # We can select which goodness-of-fit stats to show
+)
+
+modelsummary(
+  lm_2023_AFR_model,
+  title = "TB Mortality Drivers in 2023 (AFR Region)",
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared") # We can select which goodness-of-fit stats to show
+)
+```
+

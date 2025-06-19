@@ -2360,6 +2360,8 @@ Our objective is to answer: **"What factors influence the evolution of the TB in
 library(tidyverse)
 library(plm)
 library(broom)
+library(broom.helpers)
+library(gtsummary)
 library(modelsummary)
 ```
 
@@ -2447,6 +2449,12 @@ Method C: Professional Regression Table with `modelsummary`
 # Create a beautiful summary table
 # The 'stars = TRUE' argument adds the significance stars.
 modelsummary(fe_model, stars = TRUE)
+```
+
+Method D: Using table_regression
+
+```{r}
+fe_model %>% tbl_regression()
 ```
 
 Simple regression model for Timor-Leste to compare with global trends
